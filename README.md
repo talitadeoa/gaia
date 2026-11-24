@@ -419,6 +419,16 @@ workspace ausente, escopo que não contém o workspace) recusa subir com mensage
 clara, e um bot que depende de uma pasta que ainda não existe aparece como
 indisponível em vez de derrubar a Gaia.
 
+No web, o rail à esquerda mostra os cinco com o **nome completo**, o badge de
+não-lido e o ponto de "rodando"; clicar navega para `#b/<bot>` (F5 e o voltar
+do navegador continuam). O card **atividade** no aside mostra o que cada bot
+produziu em segundo plano, e `falar_com_bot` deixa um bot perguntar a outro
+(uma resposta, no máximo duas chamadas encadeadas).
+
+Segundo plano não amplia permissão: `write`/`edit`/`bash` continuam pedindo
+aprovação e, num job sem ninguém olhando a tela, a permissão é negada e o feed
+avisa — nunca silêncio.
+
 ## Agente e ferramentas
 
 O motor fica em `gaia/agent/` e fala direto com a API do provedor — sem

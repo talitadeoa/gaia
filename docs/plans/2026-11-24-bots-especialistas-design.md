@@ -1,6 +1,6 @@
 # Bots especialistas — design
 
-> **Status: aprovado; fases 0 e 1 implementadas, fases 2–4 não.** As
+> **Status: aprovado; fases 0 a 4 implementadas.** As
 > cinco decisões do §10 estão tomadas. O plano de execução por fases está no §7
 > e é a base do `writing-plans`. Referência atemporal:
 > [`../../AGENTS.md`](../../AGENTS.md).
@@ -490,6 +490,15 @@ commitável sozinha.
 
 ### Fase 2 — sidebar e atividade (fecha o MVP visível)
 
+> **Feita.** O rail `#rail-bots` é montado a partir de `GET /bots` (nome
+> completo, inicial, badge de não-lido e ponto de "rodando"), o hash `#b/<bot>`
+> é a fonte de verdade (clique navega; `hashchange` pede `POST /bot/select`) e
+> o feed do aside (`#bot-atividade`, recolhido por padrão) lê
+> `GET /bots/activity`/`POST /bots/seen`. O evento SSE `bot_activity` só acende
+> badge/feed — nunca vira bolha na conversa. Rotas e telas testadas em
+> `tests/test_serve_instances.py`, `tests/test_serve_app.py` e
+> `tests/test_serve_web.py`; o motor em `tests/test_bots_activity.py`.
+
 8. **Sidebar + `#b/<bot>`** no `index.html` (rail, badge, indicador de rodando;
    `corpo` do chat redesenha em `/bot/select`). *Teste*: `test_serve_web.py`
    confere hash→tela, ids e que o rail é montado a partir de `/bots`.
@@ -499,8 +508,21 @@ commitável sozinha.
 
 ### Fase 3 — automações por bot
 
-10. **`automations.bot`/`runs.bot`** no seed (`describe`), no `render`, no
-    `/automations` (agrupado) e no scheduler (gate por bot, não global).
+> **Feita** (itens 10–14). `automations.bot` entra no `describe`, no `render`
+> e no `seed`; o agendador checa `bot_busy(item.bot)` (trava por bot) e não
+> mais o `_busy` global sozinho. A Ariana entrega no painel
+> (`bot_messages`) e o Telegram virou opcional — o `requires` dela perdeu
+> `telegram.enabled`. A skill `bot_task` roda um prompt na sessão do bot
+> (`channel='job'`) e grava `runs` + feed; `criar_automacao` aceita
+> "pede pra Donna …". O aviso do backlog grava o PR no feed da Ada (o worker
+> não grava `runs`: quem tem o `bot` é a mensagem) e a Sabrina nasceu em LaTeX.
+> `BotBus` e a tela do feed (item 16) entraram junto, então a Fase 4 também
+> está fechada.
+
+10. **`automations.bot`/`runs.bot`** no seed (`describe`), no `render` e no
+    `/automations` (a linha mostra o dono; o agrupamento por bot no painel
+    fica para quando houver mais de uma automação por bot) e no scheduler
+    (gate por bot, não global).
     *Teste*: Ariana e Ada devidas no mesmo minuto rodam; automação da Ariana
     não roda com a sessão da Ariana ocupada e não bloqueia a Ada.
 11. **Ariana entrega no painel** (§4.5a) — `market:watchlist` grava
@@ -513,8 +535,10 @@ commitável sozinha.
     sessão, gravando `runs` + `bot_messages`; `criar_automacao` aceita
     `bot` na lista fechada. *Teste*: job grava mensagem, erro vira `runs.failed`
     com `error_kind` e mensagem no feed.
-13. **Ada no backlog** — `BacklogWorker` etiqueta `bot=ada`; o PR aberto vira
-    `bot_messages`. *Teste*: `test_backlog.py` com o campo novo.
+13. **Ada no backlog** — o aviso do PR (`controller/backlog.py`) grava
+    `bot_messages` de `ada`; a etiqueta vive na mensagem do feed (o worker não
+    registra `runs`, que é só de rotina com horário). *Teste*:
+    `test_backlog.py` com o feed da Ada.
 14. **Sabrina em LaTeX** — a persona/diretriz passa a exigir `.tex` (base
     `cv-pt.tex` intocável, variante `cv-pt-<empresa>.tex`, `pdflatex` pelo
     `bash` aprovado, nunca editar a base nem inventar experiência).
@@ -522,6 +546,14 @@ commitável sozinha.
     `scope` dela é `~/SecondBrain/cv`.
 
 ### Fase 4 — bots conversando
+
+> **Feita.** `gaia/bots/bus.py` (`BotBus`) + ferramenta `falar_com_bot`
+> (`gaia/agent/tools/bots.py`). `MAX_DEPTH = 2`, destino limitado por
+> `bot.can_message`, `to == from` recusado, sessão do destino com a política
+> dele e auditoria em `bot_messages` (kind `inter_bot`). A ferramenta só entra
+> no catálogo com o bus ligado (`start_bot_bus` no boot) e a allowlist de cada
+> bot é que decide quem a tem. Profundidade viaja em `contextvars` (o
+> `to_thread` das ferramentas copia o contexto).
 
 15. **`BotBus` + ferramenta `falar_com_bot`** com profundidade, allowlist de
     destino e auditoria. *Teste*: chamada de 2 níveis funciona, 3 níveis recusa,
