@@ -1,6 +1,6 @@
 # Bots especialistas — design
 
-> **Status: aprovado; design fechado, implementação ainda não começada.** As
+> **Status: aprovado; fase 0 implementada, fases 1–4 não.** As
 > cinco decisões do §10 estão tomadas. O plano de execução por fases está no §7
 > e é a base do `writing-plans`. Referência atemporal:
 > [`../../AGENTS.md`](../../AGENTS.md).
@@ -425,6 +425,11 @@ Cada fase fecha verde (`pytest`, `ruff check gaia tests`, `mypy`) e é
 commitável sozinha.
 
 ### Fase 0 — fundação (pré-requisito, sem UI nova)
+
+> **Feita** (plano executável em `2026-11-24-bots-fase0.md`): eventos por
+> sessão, `SessionPolicy` + `ToolContext.scope`, schema v12 e
+> `secondbrain.text_extensions`. O índice também ganhou título por
+> `\section`/`\chapter` para o `.tex` da Donna.
 
 1. **Eventos por sessão** — `AgentClient.subscribe_session` +
    `_emit` com fan-out + `_drain_events(session_id)`; `turns.py` passa a usar a

@@ -45,7 +45,7 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 |---|---|
 | `gaia/cli.py`, `cli_parser.py`, `cli_commands.py`, `cli_integrations.py`, `cli_runtime.py`, `cli_serve.py` | entrada, subcomandos, bootstrap |
 | `gaia/config.py` | modelo de config (pydantic), env `GAIA_*`, migração legada, template TOML |
-| `gaia/agent/runtime.py` | loop do agente: provedor, streaming, ferramentas, permissões |
+| `gaia/agent/runtime.py` | loop do agente: provedor, streaming, ferramentas, permissões, **eventos por sessão** (`subscribe_session`) e **política por sessão** (`SessionPolicy`) |
 | `gaia/agent/session.py` | `AgentSession` e `SessionStore` (JSON em `sessions/`) |
 | `gaia/agent/providers/` | `factory.py` (presets), `openai_compat.py`, `anthropic.py` |
 | `gaia/agent/tools/` | `build_tools()` registra `read/list/glob/grep/write/edit/bash` + agenda/planilha/audiobook/estudos + `pi` (quando `[pi] enabled`) |
@@ -154,6 +154,13 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 - **Nova ferramenta:** crie o spec/handler em `gaia/agent/tools/`, registre em
   `build_tools()` e marque `requires_approval=True` se alterar algo. Adicione
   teste em `tests/test_agent.py` e, se for específica, no arquivo do domínio.
+- **Nova política de sessão (base dos bots):**
+  `client.set_session_policy(session_id, SessionPolicy(tools=...,
+  directory=..., scope=..., bot=...))` antes do primeiro turno. A allowlist da
+  política ganha da lista do turno; `scope` é o teto de
+  `read/write/edit/list/glob/grep` e `directory` é o `cwd` de `bash`/`pi`. A
+  política é persistida no JSON da sessão (`data/sessions/`), então sobrevive ao
+  restart. Registro declarativo (`gaia/bots/`) é a fase seguinte.
 - **Ferramenta `pi` (delegar codigo ao harness):** desligada por padrao em
   `[pi] enabled = false`. O pi roda com `cwd = pi.workspace` (padrao
   `~/pr-workspace`), **nunca** em `~/gaia`: o `gaia-deploy.timer` faz
@@ -326,6 +333,15 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 
 ## Armadilhas já descobertas
 
+- **Eventos do agente são por sessão, não globais.** `AgentClient._emit` faz
+  fan-out para `subscribe_session(session_id)`; `_drain_events(session_id)`
+  limpa só a fila daquela sessão. Esvaziar a fila global num turno concorrente
+  apaga os eventos de outro turno, que fica mudo até o `stall_timeout` (sem
+  erro visível).
+- **`ToolContext.scope` é o teto de filesystem; `directory` é só o cwd.** Um
+  bot com `scope` que não contém o `workspace` escreve e não consegue ler o que
+  escreveu. `scope` fica por último no dataclass de propósito: há chamador
+  posicional em teste (`ToolContext(dir, True, None, secondbrain)`).
 - **SSE:** assine a fila **antes** de enviar os cabeçalhos; o cliente dispara no
   header e o evento se perde para sempre.
 - **Permissão:** quem espera é o `RemoteUI`, não o `Target`; o transporte resolve
