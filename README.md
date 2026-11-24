@@ -89,7 +89,7 @@ As variáveis conhecidas estão em `.env.example`, comentadas uma a uma.
 ```toml
 [agent]
 # Presets: commandcode | deepseek | openai | openrouter | ollama | anthropic |
-# opencode | groq | mistral | xai | custom
+# opencode | groq | mistral | xai | opendesign | custom
 provider = "commandcode"
 model = "deepseek/deepseek-v4.1-flash"
 base_url = ""             # obrigatório apenas em "custom"
@@ -102,10 +102,17 @@ precisa colar nada. Para os modelos Claude dela, use
 `provider = "commandcode-anthropic"` (mesma chave, wire Anthropic). Requer
 plano com acesso à Provider API.
 
+O **OpenDesign** (`provider = "opendesign"`, `base_url`
+`https://amr-link.open-design.ai/v1`) é um gateway compatível com OpenAI, o
+mesmo que o pi usa: um endpoint, os modelos de todas as famílias (Claude, GPT,
+Gemini, DeepSeek, GLM, Kimi, Qwen...). A chave é a mesma do pi, lida de
+`~/.pi/agent/auth.json`; também vale `OPENDESIGN_API_KEY`.
+
 | Atalho | Vai para | Consulta a rede? |
 |---|---|---|
 | `/modelo cc` | Command Code, com o último modelo usado lá | não |
 | `/modelo ds` | DeepSeek direta (`deepseek-flash`, o V4.1 Flash deles) | não |
+| `/modelo od` | OpenDesign (`deepseek-v4.1-flash`, o gateway do pi) | não |
 | `/modelo glm` | `commandcode/z-ai/glm-5.3-flash` | não |
 | `/modelo turbo` | `commandcode/deepseek/deepseek-v4.1-flash-fast` | não |
 | `/modelo zen` | OpenCode Zen, com o último modelo usado lá | não |

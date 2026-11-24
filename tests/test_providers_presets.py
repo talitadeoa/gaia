@@ -26,8 +26,40 @@ def test_aliases_apontam_para_presets():
     assert normalize_provider("cc") == "commandcode"
     assert normalize_provider("goat") == "commandcode"
     assert normalize_provider("cc-claude") == "commandcode-anthropic"
+    assert normalize_provider("od") == "opendesign"
+    assert normalize_provider("open-design") == "opendesign"
     assert normalize_provider("zen") == "opencode"
     assert normalize_provider("Claude") == "anthropic"
+
+
+def test_preset_do_opendesign():
+    info = describe_provider("opendesign")
+    assert info["api"] == "openai"
+    assert info["base_url"] == "https://amr-link.open-design.ai/v1"
+    assert normalize_provider("opendesign") == "opendesign"
+
+
+def test_chave_do_opendesign_vem_do_pi(monkeypatch, tmp_path):
+    """A chave do pi (`auth.json`) serve ao preset, sem colar nada no .env."""
+    auth = tmp_path / "auth.json"
+    auth.write_text(json.dumps({"opendesign": {"key": "sk-amr-abc"}}), encoding="utf-8")
+    monkeypatch.setattr(
+        "gaia.agent.providers.factory.PRESETS",
+        {**PRESETS, "opendesign": _with_auth(PRESETS["opendesign"], auth)},
+    )
+
+    assert preset_api_key("opendesign") == "sk-amr-abc"
+
+
+def test_chave_do_opendesign_por_ambiente(monkeypatch):
+    monkeypatch.setenv("OPENDESIGN_API_KEY", "sk-amr-env")
+    assert preset_api_key("opendesign") == "sk-amr-env"
+
+
+def test_opendesign_declara_o_modelo_rapido_barato():
+    # "eco" e a variante barata do mesmo modelo no gateway; vazio faria o
+    # pedido curto cair no principal (mais caro).
+    assert PRESETS["opendesign"].fast_model == "deepseek-v4.1-flash-eco"
 
 
 def test_base_urls_da_command_code():
