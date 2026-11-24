@@ -559,3 +559,66 @@ def test_count_meta_conta_so_o_prefixo(tmp_path):
         assert store.count_meta("nada:") == 0
     finally:
         store.close()
+
+
+# ------------------------------------------------------- schema v12 (bots)
+def test_schema_v12_bot_em_runs_e_automations(tmp_path):
+    store = MemoryStore(tmp_path / "gaia.db")
+    try:
+        assert store.schema_version() >= 12
+        run_id = store.begin_run(
+            kind="market", automation="market:watchlist", bot="ariana"
+        )
+        store.finish_run(run_id, status="completed", detail="3 ativos")
+        linha = store.last_run("market", "market:watchlist")
+        assert linha is not None and linha["bot"] == "ariana"
+
+        store.upsert_automation(id="market:watchlist", skill="market", bot="ariana")
+        atual = store.get_automation("market:watchlist")
+        assert atual is not None and atual["bot"] == "ariana"
+        assert [r["id"] for r in store.list_runs(bot="ariana")] == [run_id]
+        assert store.list_runs(bot="ada") == []
+    finally:
+        store.close()
+
+
+def test_bot_messages_feed_e_nao_lido(tmp_path):
+    store = MemoryStore(tmp_path / "gaia.db")
+    try:
+        assert store.unread_by_bot() == {}
+        store.add_bot_message("ariana", "job", "Bolsa", "3 altas, 1 alerta")
+        store.add_bot_message("ariana", "inter_bot", "Donna", "capitulo 2 ok")
+        store.add_bot_message("ada", "job", "PR", "#123 aberto")
+
+        assert store.unread_by_bot() == {"ariana": 2, "ada": 1}
+        feed = store.list_bot_messages("ariana")
+        # Mais novo primeiro: o inter_bot foi o ultimo inserido.
+        assert [m["title"] for m in feed] == ["Donna", "Bolsa"]
+        assert feed[0]["kind"] == "inter_bot"
+
+        assert store.mark_bot_seen("ariana") == 2
+        assert store.unread_by_bot() == {"ada": 1}
+        assert store.list_bot_messages("ariana", unread_only=True) == []
+    finally:
+        store.close()
+
+
+def test_schema_v12_migra_banco_existente_e_e_idempotente(tmp_path):
+    """Abrir duas vezes nao duplica coluna nem recria a tabela."""
+    MemoryStore(tmp_path / "gaia.db").close()
+    store = MemoryStore(tmp_path / "gaia.db")
+    try:
+        colunas = {
+            row["name"]
+            for row in store._conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        assert "bot" in colunas
+        store.add_bot_message("gaia", "aviso", "t", "x")
+        store.add_bot_message("gaia", "aviso", "t2", "y")
+        assert len(store.list_bot_messages("gaia")) == 2
+        # Run antigo (sem bot) continua valido e cai na atribuicao padrao.
+        antigo = store.begin_run(kind="career")
+        linha = store.last_run("career")
+        assert linha is not None and linha["id"] == antigo and linha["bot"] == ""
+    finally:
+        store.close()
