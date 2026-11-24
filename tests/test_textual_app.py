@@ -1012,12 +1012,16 @@ async def test_modal_de_modo_aplica_modo_escolhido():
         await pilot.press("tab")
         await pilot.pause()
         assert isinstance(app.screen, ModePicker)
+        # O fake abre em "assistente" (chave antiga): nenhum bot atual casa,
+        # entao o destaque comeca no primeiro e "up" da a volta no ultimo.
+        # Nao fixe o nome do bot aqui: o registry cresce (fase 1 = 5 bots).
+        ultimo = list(PERSONAS)[-1]
         await pilot.press("up")
         await pilot.press("enter")
         await pilot.pause()
         assert len(app.screen_stack) == 1
-        assert voice.mode_key == "investidora"
-        assert voice.selected_modes == ["investidora"]
+        assert voice.mode_key == ultimo
+        assert voice.selected_modes == [ultimo]
 
 
 @pytest.mark.asyncio

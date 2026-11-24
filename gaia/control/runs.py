@@ -103,6 +103,9 @@ class RunHandle:
     error_kind: str = ""
     status: str = "running"
     finished: bool = False
+    # Atribuicao da execucao (vazio = `gaia`, o comportamento anterior aos
+    # bots). O painel agrupa o feed por este campo.
+    bot: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def fail(self, message: str, kind: str = "") -> None:
@@ -120,6 +123,7 @@ async def record_run(
     trigger: str = "schedule",
     delivery: str = "",
     attempt: int = 1,
+    bot: str = "",
 ) -> AsyncIterator[RunHandle]:
     """Registra inicio/fim de uma execucao real de rotina.
 
@@ -133,6 +137,7 @@ async def record_run(
         trigger=trigger,
         delivery=delivery,
         attempt=attempt,
+        bot=bot,
     )
     try:
         run.id = store.begin_run(
@@ -141,6 +146,7 @@ async def record_run(
             trigger=trigger,
             delivery=delivery,
             attempt=attempt,
+            bot=bot,
         )
     except Exception as exc:  # banco travado nao pode matar a rotina
         logger.warning("run: nao foi possivel abrir a execucao de %s: %s", kind, exc)
@@ -184,6 +190,7 @@ def render_run(row: dict[str, Any]) -> dict[str, Any]:
         "id": int(row.get("id") or 0),
         "kind": str(row.get("kind") or ""),
         "automation": str(row.get("automation") or ""),
+        "bot": str(row.get("bot") or ""),
         "trigger": str(row.get("trigger") or ""),
         "status": str(row.get("status") or ""),
         "started_at": str(row.get("started_at") or ""),

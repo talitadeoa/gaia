@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 # Versao atual do schema. Incremente ao adicionar novas migracoes em _migrate.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # v5: conversas separadas por canal (cli, telegram, whatsapp).
 DEFAULT_CHANNEL = "cli"
@@ -191,6 +191,21 @@ class MemoryStore:
                     enabled INTEGER NOT NULL DEFAULT 1,
                     updated_at TEXT NOT NULL
                 );
+
+                -- v12: cada bot tem feed proprio no painel (resultado de
+                -- segundo plano e recado entre bots). `seen` alimenta o badge
+                -- de nao-lido; nao existe "lido por dispositivo".
+                CREATE TABLE IF NOT EXISTS bot_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'job',   -- job | inter_bot | aviso
+                    title TEXT NOT NULL DEFAULT '',
+                    text TEXT NOT NULL DEFAULT '',
+                    seen INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_bot_messages_bot
+                    ON bot_messages(bot, seen, created_at DESC);
                 """
             )
             self._migrate()
@@ -257,6 +272,25 @@ class MemoryStore:
                     self._conn.execute(
                         "ALTER TABLE automations ADD COLUMN params TEXT NOT NULL DEFAULT ''"
                     )
+        if version < 12:
+            # v12: atribuicao de bot na agenda e no historico de execucao. A
+            # coluna vazia = `gaia` (comportamento de antes dos bots).
+            with self._conn:
+                for tabela in ("runs", "automations"):
+                    colunas = {
+                        row["name"]
+                        for row in self._conn.execute(
+                            f"PRAGMA table_info({tabela})"
+                        ).fetchall()
+                    }
+                    if "bot" not in colunas:
+                        self._conn.execute(
+                            f"ALTER TABLE {tabela} ADD COLUMN bot TEXT NOT NULL DEFAULT ''"
+                        )
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_runs_bot "
+                    "ON runs(bot, started_at DESC)"
+                )
         if version < SCHEMA_VERSION:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
 
@@ -670,11 +704,13 @@ class MemoryStore:
         delivery: str = "",
         attempt: int = 1,
         started_at: str = "",
+        bot: str = "",
     ) -> int:
         """Abre uma execucao e devolve o id. Chamar so quando de fato executa.
 
         ``started_at`` permite registrar uma execucao ja ocorrida (importacao
-        de historico); vazio usa o instante atual.
+        de historico); vazio usa o instante atual. ``bot`` e a atribuicao da
+        rotina (vazio = `gaia`, o comportamento de antes dos bots).
         """
         started = started_at or _now()
         with self._lock, self._conn:
@@ -682,10 +718,10 @@ class MemoryStore:
                 """
                 INSERT INTO runs
                     (kind, automation, trigger, status, started_at,
-                     delivery, attempt)
-                VALUES (?, ?, ?, 'running', ?, ?, ?)
+                     delivery, attempt, bot)
+                VALUES (?, ?, ?, 'running', ?, ?, ?, ?)
                 """,
-                (kind, automation, trigger, started, delivery, int(attempt)),
+                (kind, automation, trigger, started, delivery, int(attempt), bot),
             )
             return int(cursor.lastrowid or 0)
 
@@ -734,7 +770,7 @@ class MemoryStore:
             )
 
     def list_runs(
-        self, limit: int = 50, kind: str = "", status: str = ""
+        self, limit: int = 50, kind: str = "", status: str = "", bot: str = ""
     ) -> list[dict[str, Any]]:
         """Execucoes mais recentes primeiro, com filtro opcional."""
         clausulas: list[str] = []
@@ -745,6 +781,9 @@ class MemoryStore:
         if status:
             clausulas.append("status = ?")
             valores.append(status)
+        if bot:
+            clausulas.append("bot = ?")
+            valores.append(bot)
         where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
         valores.append(max(1, min(int(limit), 500)))
         with self._lock:
@@ -838,6 +877,7 @@ class MemoryStore:
         last_result: str = "",
         name: str = "",
         params: dict[str, Any] | None = None,
+        bot: str = "",
     ) -> None:
         """Cria ou substitui uma automacao (todas as colunas).
 
@@ -852,8 +892,8 @@ class MemoryStore:
                 INSERT INTO automations
                     (id, skill, enabled, days, at, until, delivery,
                      retry_max, retry_backoff_minutes, last_result, name,
-                     params, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     params, bot, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     skill = excluded.skill,
                     enabled = excluded.enabled,
@@ -866,6 +906,7 @@ class MemoryStore:
                     last_result = excluded.last_result,
                     name = excluded.name,
                     params = excluded.params,
+                    bot = excluded.bot,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -881,6 +922,7 @@ class MemoryStore:
                     last_result,
                     name,
                     json.dumps(params or {}, ensure_ascii=False, sort_keys=True),
+                    bot,
                     _now(),
                 ),
             )
@@ -899,6 +941,7 @@ class MemoryStore:
             "last_result",
             "name",
             "params",
+            "bot",
         }
         mudancas = {chave: valor for chave, valor in campos.items() if chave in permitidas}
         if not mudancas:
@@ -917,6 +960,58 @@ class MemoryStore:
                 valores,
             )
             return cursor.rowcount > 0
+
+    # ------------------------------------------------------------ bot_messages
+    def add_bot_message(
+        self, bot: str, kind: str = "job", title: str = "", text: str = ""
+    ) -> int:
+        """Grava um item do feed do bot (resultado de job ou recado entre bots)."""
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO bot_messages (bot, kind, title, text, seen, created_at)
+                VALUES (?, ?, ?, ?, 0, ?)
+                """,
+                (bot, kind, title, text, _now()),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def list_bot_messages(
+        self, bot: str = "", limit: int = 50, unread_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """Feed do bot, mais novo primeiro. ``bot`` vazio = feed de todos."""
+        sql = "SELECT * FROM bot_messages WHERE 1 = 1"
+        valores: list[Any] = []
+        if bot:
+            sql += " AND bot = ?"
+            valores.append(bot)
+        if unread_only:
+            sql += " AND seen = 0"
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        valores.append(max(1, min(int(limit), 500)))
+        with self._lock:
+            rows = self._conn.execute(sql, valores).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_bot_seen(self, bot: str = "") -> int:
+        """Marca tudo como lido e devolve quantos itens mudaram ("" = todos)."""
+        sql = "UPDATE bot_messages SET seen = 1 WHERE seen = 0"
+        valores: tuple[Any, ...] = ()
+        if bot:
+            sql += " AND bot = ?"
+            valores = (bot,)
+        with self._lock, self._conn:
+            cursor = self._conn.execute(sql, valores)
+            return cursor.rowcount
+
+    def unread_by_bot(self) -> dict[str, int]:
+        """Contagem de nao-lidos por bot (o badge do rail)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT bot, COUNT(*) AS total FROM bot_messages "
+                "WHERE seen = 0 GROUP BY bot"
+            ).fetchall()
+        return {row["bot"]: int(row["total"]) for row in rows}
 
     # ---------------------------------------------------------------- routines
     def list_routines(self) -> list[dict[str, Any]]:

@@ -106,6 +106,8 @@ def test_tela_de_automacoes_no_html():
     assert 'api("/proactive"' in texto
     # Status em portugues (o pedido era "se falhou ou se deu certo").
     assert '"deu certo"' in texto and '"não rodou"' in texto
+    # Agrupamento por bot: o dono vem do servidor (`render` devolve `bot`).
+    assert "item.bot || \"gaia\"" in texto
 
 
 def test_rotinas_continuas_na_tela_de_automacoes():
@@ -762,3 +764,73 @@ def test_painel_control_lista_as_rotinas():
     assert "Rotinas contínuas" in js
     assert "dados.routines" in js
     assert "trigger_label" in js
+
+
+# ------------------------------------------------------- bots (fase 2) ---
+
+
+def test_rail_de_bots_no_html():
+    """Rail à esquerda: nome completo, badge e `#b/<bot>` como hash.
+
+    O contrato que a fase 2 fecha: cinco bots montados a partir de
+    `GET /bots` (nunca lista fixa), o clique navega por `#b/<id>` (F5 e o
+    voltar do navegador continuam) e a thread troca por `POST /bot/select`.
+    """
+    texto, coletor = _html()
+    assert 'id="rail-bots"' in texto
+    assert "rail-bots" in coletor.ids
+    # O rail e do chat (nao e uma tela propria): fica dentro de #view-chat.
+    assert 'id="view-chat"' in texto
+    assert texto.index('id="rail-bots"') > texto.index('id="view-chat"')
+    # Nome completo visivel; id so no tooltip/data-bot.
+    assert 'class: "nome-bot"' in texto and "bot.name || bot.id" in texto
+    assert '"data-bot": bot.id' in texto
+    # Montado a partir da rota (a tela nunca fixa a lista).
+    assert 'api("/bots")' in texto
+    assert "function pintarRail(bots)" in texto
+    # Troca pelo hash e pela rota nova (nao por /mode).
+    assert "/^#b\\/[a-z0-9_-]+$/" in texto
+    assert "function botDoHash()" in texto
+    assert 'api("/bot/select"' in texto
+    assert "function trocarBot(chave)" in texto
+    # O clique no rail NAVEGA (o hash e a fonte de verdade, nao um estado solto).
+    assert 'location.hash = "#b/" + bot.id' in texto
+    assert 'id="badge-"' not in texto  # o badge e por item, sem id fixo
+    assert 'class: "badge"' in texto
+    assert 'class: "rodando"' in texto
+    # Hash trocado nao recarrega a pagina: hashchange pede a troca.
+    assert 'const pedido = botDoHash();' in texto
+    # O boot espera o motor antes de comparar o hash com o bot ativo.
+    assert "await carregarBots();" in texto
+    assert "pintarTelaAtual();\n  // `#b/<bot>` pede a thread daquele bot" in texto
+
+
+def test_feed_de_atividade_no_aside():
+    """O card do feed existe, e recolhido por padrao, e nao entra na conversa."""
+    texto, coletor = _html()
+    assert 'id="bot-atividade"' in texto
+    assert "bot-atividade" in coletor.ids
+    assert 'api("/bots/activity?limit=30")' in texto
+    assert 'api("/bots/seen"' in texto
+    assert "function carregarAtividade()" in texto
+    assert "function pintarAtividade()" in texto
+    # Evento de bot alheio nao vira bolha: o `case` so atualiza feed/rail.
+    assert 'case "bot_activity":' in texto
+    trecho = texto[texto.index('case "bot_activity":'):]
+    trecho = trecho[: trecho.index("break;")]
+    assert "carregarAtividade();" in trecho and "carregarBots();" in trecho
+    assert "bolha(" not in trecho
+    # Estado do recolhido sobrevive ao redesenho.
+    assert "atividadeAberta: false" in texto
+
+
+def test_rail_e_feed_nao_quebram_sem_motor_novo():
+    """`/bots` e `/bots/activity` falhando = tela segue (sem rail, sem card)."""
+    texto, _ = _html()
+    trecho = texto[texto.index("async function carregarBots()"):]
+    trecho = trecho[: trecho.index("async function trocarBot")]
+    assert "pintarRail([])" in trecho
+    assert "carregarAtividade();" in trecho
+    trecho = texto[texto.index("async function carregarAtividade()"):]
+    trecho = trecho[: trecho.index("function pintarAtividade")]
+    assert "estado.atividade = null" in trecho

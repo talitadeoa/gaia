@@ -54,6 +54,7 @@ def criar_automacao(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             f"{resultado.confidence}/10 skill={resultado.skill} "
             f"dias={','.join(str(dia) for dia in resultado.days) or '-'} "
             f"hora={resultado.at or '-'} entrega={resultado.delivery or '-'} "
+            f"bot={resultado.params.get('bot') or '-'} "
             f"id={resultado.automation_id or '-'} (teto {MAX_PER_DAY}/dia)"
         )
     )
@@ -66,10 +67,13 @@ AUTOMATION_TOOLS: tuple[dict[str, Any], ...] = (
             "Cria uma automacao recorrente a partir do pedido da pessoa. Use "
             "quando ela disser algo como 'toda sexta as 9h me lembre de "
             "estudar', 'todo dia as 8h me mande o resumo da agenda' ou 'toda "
-            "quarta as 20h resumo dos estudos'. O parser extrai dia, horario, "
-            "skill alvo e entrega; a confianca e medida por regras: alta cria "
-            "ativa, media cria pausada para conferir e baixa pede reformular. "
-            "Nunca edita nem apaga automacao existente."
+            "quarta as 20h resumo dos estudos'. Tambem atende pedido a um bot "
+            "('toda sexta as 10h pede pra Donna revisar o capitulo'): a "
+            "automacao roda na sessao daquele bot e entrega no feed do painel. "
+            "O parser extrai dia, horario, skill alvo e entrega; a confianca e "
+            "medida por regras: alta cria ativa, media cria pausada para "
+            "conferir e baixa pede reformular. Nunca edita nem apaga automacao "
+            "existente."
         ),
         parameters=schema(
             {

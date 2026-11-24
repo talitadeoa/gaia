@@ -45,19 +45,27 @@ MAX_PER_DAY = 10
 SKILL_REMINDER = "reminder"
 SKILL_AGENDA = "agenda_summary"
 SKILL_ESTUDOS = "estudos_summary"
+# Pedido recorrente a um bot (segundo plano por prompt, design §4.5/§7 item 12).
+SKILL_BOT = "bot_task"
 
 # skill -> caminho de config que precisa estar ligado (``requires`` da skill).
 SKILL_REQUIRES: dict[str, str] = {
     SKILL_REMINDER: "proactive.reminders",
     SKILL_AGENDA: "agenda.enabled",
     SKILL_ESTUDOS: "estudos.enabled",
+    SKILL_BOT: "agent.tools",
 }
 
 SKILL_NAMES: dict[str, str] = {
     SKILL_REMINDER: "Lembrete",
     SKILL_AGENDA: "Resumo da agenda",
     SKILL_ESTUDOS: "Resumo de estudos",
+    SKILL_BOT: "Pedido ao bot",
 }
+
+# Bot padrao quando a frase pedir `bot_task` sem nomear o bot (Ariana e Sabrina
+# nunca: o resumo diario delas e deterministico).
+BOT_PADRAO = "gaia"
 
 # ---- dias ------------------------------------------------------------------
 DAY_NAMES = ("segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo")
@@ -136,6 +144,14 @@ _REMINDER_RE = re.compile(
 _AGENDA_RE = re.compile(r"\bagend(?:a|as|inha)\b")
 _ESTUDOS_RE = re.compile(r"\b(?:estud(?:o|ar|os)|simulad(?:o|os)|abin)\b")
 _SUMMARY_HINT_RE = re.compile(r"\b(?:resum(?:o|e|a|ir)|manda(?:r)?|envia(?:r)?|manda)\b")
+# Pedido ao bot: "pede pra Donna revisar o capitulo 2". So existe `bot_task`
+# quando o nome/id do bot aparece junto do verbo de pedir.
+_BOT_RE = re.compile(r"\b(?:pede|peca|pergunta|pergunte|manda)(?:\s+pra|\s+para)?\s+")
+_BOT_NAME_RE = re.compile(r"\b(?:donna|ariana|sabrina|ada|gaia)\b")
+_BOT_VERB_RE = re.compile(
+    r"\b(?:pede|peca|pergunta|pergunte|manda)\b"
+    r"(?:\s+(?:pra|para|a|ao|pro))?"
+)
 
 # ---- limpeza do rotulo -----------------------------------------------------
 _REMINDER_PREFIX_RE = re.compile(
@@ -312,8 +328,12 @@ def parse_time(text: str) -> str:
 
 
 def parse_target(text: str) -> str:
-    """Skill alvo: reminder | agenda_summary | estudos_summary | ""."""
+    """Skill alvo: reminder | agenda_summary | estudos_summary | bot_task | ""."""
     norm = _normalize(text)
+    # `bot_task` vem antes: "pede pra Donna revisar o estudo" nao e resumo de
+    # estudos nem lembrete, e o nome do bot e o sinal mais forte.
+    if _BOT_VERB_RE.search(norm) and _BOT_NAME_RE.search(norm):
+        return SKILL_BOT
     if _REMINDER_RE.search(norm):
         return SKILL_REMINDER
     if _ESTUDOS_RE.search(norm):
@@ -321,6 +341,56 @@ def parse_target(text: str) -> str:
     if _AGENDA_RE.search(norm):
         return SKILL_AGENDA
     return ""
+
+
+def parse_bot(text: str) -> str:
+    """Bot citado na frase (id curto) ou ``""`` quando nao ha nome."""
+    norm = _normalize(text)
+    achado = _BOT_NAME_RE.search(norm)
+    return achado.group(0) if achado else ""
+
+
+def parse_bot_prompt(text: str) -> str:
+    """O pedido ao bot sem o nome dele nem o verbo de pedir.
+
+    "pede pra Donna revisar o capitulo 2" -> "revisar o capitulo 2". Vazio =
+    so citou o bot, sem pedir nada (o chamador pede para reformular).
+    """
+    original = " ".join(str(text or "").split())
+    norm = _normalize(original)
+    if not norm:
+        return ""
+    spans: list[tuple[int, int]] = []
+    for regex in (_DAY_RANGE_RE, _ALL_DAYS_RE, _WEEKDAYS_RE, _WEEKEND_RE, _WD_RE):
+        spans.extend(match.span() for match in regex.finditer(norm))
+    _, time_span = _time_match(original)
+    if time_span is not None:
+        spans.append(time_span)
+    verbo = _BOT_VERB_RE.search(norm)
+    if verbo is not None:
+        spans.append(verbo.span())
+    nome = _BOT_NAME_RE.search(norm)
+    if nome is not None:
+        spans.append(nome.span())
+    removido = [False] * len(norm)
+    for inicio, fim in spans:
+        for indice in range(max(0, inicio), min(len(norm), fim)):
+            removido[indice] = True
+    tokens = [
+        (match.start(), match.end(), match.group(0))
+        for match in re.finditer(r"\S+", norm)
+        if not all(removido[indice] for indice in range(match.start(), match.end()))
+    ]
+    # "toda", "as" e o verbo sobraram depois de tirar dia/hora/bot: o rotulo
+    # nao pode comecar com eles (mesma limpeza do `parse_label`).
+    while tokens and _is_filler(tokens[0][2]):
+        tokens.pop(0)
+    while tokens and _is_filler(tokens[-1][2]):
+        tokens.pop()
+    if not tokens:
+        return ""
+    recorte = _slice(original, norm, tokens[0][0], tokens[-1][1])
+    return " ".join(recorte.split()).strip(" ,.;:-!?")
 
 
 def parse_delivery(text: str, cfg: Config) -> tuple[str, bool]:
@@ -402,6 +472,11 @@ def build_params(skill: str, text: str) -> dict[str, Any]:
     """Parametros que o handler da automacao vai consumir."""
     if skill == SKILL_REMINDER:
         return {"text": parse_label(text)}
+    if skill == SKILL_BOT:
+        return {
+            "bot": parse_bot(text) or BOT_PADRAO,
+            "prompt": parse_bot_prompt(text),
+        }
     return {}
 
 
@@ -430,6 +505,8 @@ def _clear_verb(text: str, skill: str) -> bool:
         return bool(parse_label(text))
     if skill in (SKILL_AGENDA, SKILL_ESTUDOS):
         return bool(_SUMMARY_HINT_RE.search(norm))
+    if skill == SKILL_BOT:
+        return bool(parse_bot_prompt(text))
     return False
 
 
@@ -524,6 +601,11 @@ def _same_automation(
         guardados = _params_de(linha)
         if skill == SKILL_REMINDER and guardados.get("text") != params.get("text"):
             continue
+        if skill == SKILL_BOT and (
+            guardados.get("bot") != params.get("bot")
+            or guardados.get("prompt") != params.get("prompt")
+        ):
+            continue
         return dict(linha)
     return None
 
@@ -557,6 +639,8 @@ def _describe(
     entrega = "no Telegram" if delivery == "telegram" else "aqui"
     if skill == SKILL_REMINDER:
         return f"Lembrete \"{label}\" {quando}, {entrega}"
+    if skill == SKILL_BOT:
+        return f"Pedido ao bot {label} {quando}, no painel"
     return f"{SKILL_NAMES.get(skill, skill)} {quando}, {entrega}"
 
 
@@ -619,7 +703,11 @@ def propose_automation(
     delivery, _ = parse_delivery(original, cfg)
     confidence, _ = score(original, cfg)
     params = build_params(skill, original)
-    label = str(params.get("text") or "") or _summary_label(skill)
+    label = (
+        str(params.get("text") or "")
+        or (str(params.get("bot") or "") if skill == SKILL_BOT else "")
+        or _summary_label(skill)
+    )
 
     def recusar(reason: str, *, status: str = "refused", action: str = "refuse") -> ProposalResult:
         return ProposalResult(
@@ -642,7 +730,8 @@ def propose_automation(
     if not skill:
         return recusar(
             "Ainda nao sei o que a automacao deve fazer. Diga se e um lembrete "
-            "(\"me lembre de X\"), um resumo da agenda ou um resumo de estudos.",
+            "(\"me lembre de X\"), um resumo da agenda, um resumo de estudos ou "
+            "um pedido a um bot (\"pede pra Donna revisar o capitulo\").",
             status="reformulate",
             action="ask",
         )
@@ -657,6 +746,13 @@ def propose_automation(
     if skill == SKILL_REMINDER and not params.get("text"):
         return recusar(
             "Entendi que e um lembrete, mas nao o assunto. Diga \"me lembre de X\".",
+            status="reformulate",
+            action="ask",
+        )
+    if skill == SKILL_BOT and not params.get("prompt"):
+        return recusar(
+            "Entendi o bot, mas nao o pedido. Diga o que ele deve fazer "
+            "(\"pede pra Donna revisar o capitulo 2\").",
             status="reformulate",
             action="ask",
         )
@@ -731,9 +827,12 @@ def propose_automation(
         days=",".join(str(dia) for dia in days),
         at=at,
         until=until,
-        delivery=delivery,
+        # Automacao por prompt entrega no feed do bot, nunca no Telegram: a
+        # resposta pode ser longa e o painel e o lugar de ler o segundo plano.
+        delivery="local" if skill == SKILL_BOT else delivery,
         name=_describe(skill, days, at, delivery, label),
         params=params,
+        bot=str(params.get("bot") or "") if skill == SKILL_BOT else "",
     )
     store.claim_meta(
         f"{_creation_prefix(momento)}{automation_id}",
@@ -775,8 +874,10 @@ def propose_automation(
 
 
 __all__ = [
+    "BOT_PADRAO",
     "MAX_PER_DAY",
     "SKILL_AGENDA",
+    "SKILL_BOT",
     "SKILL_ESTUDOS",
     "SKILL_NAMES",
     "SKILL_REMINDER",
@@ -784,6 +885,8 @@ __all__ = [
     "ProposalResult",
     "build_params",
     "creations_today",
+    "parse_bot",
+    "parse_bot_prompt",
     "parse_days",
     "parse_delivery",
     "parse_label",

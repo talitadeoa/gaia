@@ -57,14 +57,18 @@ SKILLS: tuple[Skill, ...] = (
         id="market",
         name="Monitoramento da bolsa",
         description=(
-            "Le a carteira (watchlist), busca cotacoes e envia o resumo nos dias "
-            "configurados, sem usar o modelo."
+            "Le a carteira (watchlist), busca cotacoes e entrega o resumo da "
+            "Ariana nos dias configurados, sem usar o modelo. O painel e a "
+            "entrega principal; o Telegram, quando ligado, recebe o mesmo texto."
         ),
         kind="routine",
-        requires=("briefing.enabled", "briefing.market_enabled", "telegram.enabled"),
+        # Sem `telegram.enabled`: num `serve` headless a Ariana entrega no feed
+        # do painel (design §4.5a). Exigir Telegram aqui era o gate duplo que
+        # deixava a automacao ligada e muda.
+        requires=("briefing.market_enabled",),
         schedule_hint="nos dias da carteira, dentro da janela configurada",
         module="gaia/briefing/market.py, gaia/finance/",
-        tags=("financas", "notificacao"),
+        tags=("financas",),
     ),
     Skill(
         id="briefing",

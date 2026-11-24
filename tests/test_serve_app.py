@@ -414,3 +414,156 @@ def test_search_com_query_vazia_nao_toca_o_indice():
     alvo = OrchestratorTarget(orch, RemoteUI())
     assert alvo.search("   ") == []
     assert orch.index.chamado is False
+
+
+# ------------------------------------------------------------------- bots ---
+class BotsOrch(FakeOrch):
+    """Motor falso com o registry de bots e a troca por id."""
+
+    def __init__(self, *, indisponivel: bool = False, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.bot_ativo = "gaia"
+        self.indisponivel = indisponivel
+        self.nome_ativo = "Gaia"
+
+    def bots_list(self) -> list:
+        from gaia.bots import get_bot
+
+        return [get_bot("gaia"), get_bot("donna")]
+
+    def bot_status(self, bot) -> tuple[bool, str]:
+        if bot.id == "donna" and self.indisponivel:
+            return False, "workspace inexistente: ~/dissertacao"
+        return True, ""
+
+    def bot_for(self, key: str | None):
+        from gaia.bots import get_bot
+
+        return get_bot(key)
+
+    async def select_bot(self, key: str):
+        from gaia.bots import BotIndisponivel, require_bot
+
+        bot = require_bot(key)
+        disponivel, motivo = self.bot_status(bot)
+        if not disponivel:
+            raise BotIndisponivel(f"o bot {bot.name} nao esta disponivel: {motivo}")
+        self.bot_ativo = bot.id
+        self.nome_ativo = bot.name
+        return bot
+
+    @property
+    def mode_key(self) -> str:
+        return self.bot_ativo
+
+    @property
+    def mode_name(self) -> str:
+        return self.nome_ativo
+
+
+def test_health_traz_o_bot_ativo(loop):
+    alvo = OrchestratorTarget(BotsOrch(), RemoteUI())
+    saude = alvo.health()
+    assert saude["bot"] == saude["mode_key"]
+
+
+def test_bots_lista_com_disponibilidade_e_atual(loop):
+    alvo = OrchestratorTarget(BotsOrch(), RemoteUI())
+    alvo.attach_loop(loop)
+
+    bots = alvo.bots()
+
+    assert [b["id"] for b in bots] == ["gaia", "donna"]
+    assert bots[0]["current"] is True
+    assert bots[0]["tools"] is None  # Gaia = catalogo inteiro
+    assert "read" in bots[1]["tools"]
+    assert bots[1]["available"] is True
+    # `/modes` e a mesma lista com as chaves historicas.
+    modos = alvo.modes()
+    assert [m["key"] for m in modos] == ["gaia", "donna"]
+    assert modos[0]["summary"] == bots[0]["role"]
+
+
+def test_select_bot_troca_e_devolve_mensagem(loop):
+    orch = BotsOrch()
+    alvo = OrchestratorTarget(orch, RemoteUI())
+    alvo.attach_loop(loop)
+
+    mensagens = alvo.select_bot("donna")
+
+    assert orch.bot_ativo == "donna"
+    assert mensagens == ["bot ativo: Donna Haraway — dissertação, ensaios, revisão e método"]
+
+
+def test_select_bot_desconhecido_levanta_value_error(loop):
+    alvo = OrchestratorTarget(BotsOrch(), RemoteUI())
+    alvo.attach_loop(loop)
+    with pytest.raises(ValueError):
+        alvo.select_bot("maria")
+
+
+def test_select_bot_indisponivel_levanta_bot_indisponivel(loop):
+    from gaia.bots import BotIndisponivel
+
+    alvo = OrchestratorTarget(BotsOrch(indisponivel=True), RemoteUI())
+    alvo.attach_loop(loop)
+    with pytest.raises(BotIndisponivel, match="nao esta disponivel"):
+        alvo.select_bot("donna")
+
+
+def test_select_bot_recusa_com_turno_em_andamento(loop):
+    alvo = OrchestratorTarget(BotsOrch(demorar=0.4), RemoteUI())
+    alvo.attach_loop(loop)
+    alvo.turn("primeiro")
+    with pytest.raises(MotorOcupado):
+        alvo.select_bot("donna")
+
+
+# ------------------------------------------------------- atividade (fase 2) ---
+
+
+class ActivityOrch(BotsOrch):
+    """Motor falso com feed de atividade (mensagens + runs)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mensagens_descobertas: list[str] = []
+
+    def bot_activity(self, limit: int = 30, bot: str = "") -> dict[str, Any]:
+        mensagens = [
+            {"id": 1, "bot": "donna", "kind": "job", "title": "Capitulo",
+             "text": "ok", "when": "2026-11-25T10:00:00", "seen": False},
+        ]
+        if bot:
+            mensagens = [item for item in mensagens if item["bot"] == bot]
+        return {
+            "messages": mensagens[:limit],
+            "runs": [],
+            "unread": {"donna": 1},
+        }
+
+    def bot_seen(self, bot: str = "") -> dict[str, Any]:
+        self.mensagens_descobertas.append(bot)
+        return {"ok": True, "unread": {}}
+
+
+def test_activity_e_mark_seen_chegam_ao_orquestrador(loop):
+    orch = ActivityOrch()
+    alvo = OrchestratorTarget(orch, RemoteUI())
+    alvo.attach_loop(loop)
+
+    dados = alvo.activity(5, "donna")
+    assert dados["messages"][0]["bot"] == "donna"
+    assert alvo.mark_seen("donna") == {"ok": True, "unread": {}}
+    assert orch.mensagens_descobertas == ["donna"]
+
+
+def test_activity_em_motor_antigo_levanta_runtime_error():
+    class Antigo(FakeOrch):
+        pass
+
+    alvo = OrchestratorTarget(Antigo(), RemoteUI())
+    with pytest.raises(RuntimeError):
+        alvo.activity()
+    with pytest.raises(RuntimeError):
+        alvo.mark_seen()

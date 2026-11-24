@@ -154,12 +154,18 @@ class SecondBrainIndex:
         if not self.root.exists():
             return
         excluded = {name.casefold() for name in self.cfg.exclude}
+        extensoes = tuple(
+            sorted(
+                ext if ext.startswith(".") else f".{ext}"
+                for ext in (self.cfg.text_extensions or [".md"])
+            )
+        )
         for dirpath, dirnames, filenames in os.walk(self.root):
             dirnames[:] = [
                 d for d in dirnames if d.casefold() not in excluded and not d.startswith(".")
             ]
             for filename in filenames:
-                if not filename.lower().endswith(".md"):
+                if not filename.lower().endswith(extensoes):
                     continue
                 yield Path(dirpath) / filename
 
@@ -171,6 +177,14 @@ class SecondBrainIndex:
             return None
         meta, body = parse_frontmatter(text)
         title = extract_title(meta, body, path.name)
+        if path.suffix.lower() not in {".md", ".markdown", ".txt"}:
+            # LaTeX: `\section{...}`/`\chapter{...}` e o titulo natural; sem
+            # isso o painel mostra o preambulo inteiro como titulo.
+            achado = re.search(
+                r"\\(?:chapter|section|title)\*?\{([^}]{1,120})\}", body
+            )
+            if achado:
+                title = achado.group(1).strip()
         tags = normalize_tags(meta, body)
         links = extract_links(body)
         rel = str(path.resolve().relative_to(self.root))

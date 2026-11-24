@@ -25,9 +25,10 @@ from gaia.serve.server import ServeServer
 
 class FakeTarget:
     def __init__(self) -> None:
-        self.modo = "assistente"
+        self.modo = "gaia"
         self.abriu: list[int] = []
         self.novas = 0
+        self.vistos: list[str] = []
 
     def health(self) -> dict[str, Any]:
         return {
@@ -64,20 +65,35 @@ class FakeTarget:
 
     # rotas novas -------------------------------------------------------
     def modes(self) -> list[dict[str, Any]]:
-        return [
-            {"key": "assistente", "name": "Assistente", "summary": "rotina",
-             "current": self.modo == "assistente"},
-            {"key": "pesquisadora", "name": "Pesquisadora", "summary": "pesquisa",
-             "current": self.modo == "pesquisadora"},
-        ]
+        """Alvo antigo: so `/modes`; `/bots` cai neste mesmo metodo."""
+        from gaia.bots import BotIndisponivel, get_bot
+
+        atual = self.modo
+        itens = []
+        for bot in (get_bot("gaia"), get_bot("donna")):
+            assert bot is not None
+            itens.append(
+                {
+                    "key": bot.id,
+                    "id": bot.id,
+                    "name": bot.name,
+                    "summary": bot.role,
+                    "current": bot.id == atual,
+                    "available": bot.id != "donna",
+                    "reason": "workspace inexistente" if bot.id == "donna" else "",
+                }
+            )
+        assert BotIndisponivel  # a excecao e tratada em outro teste
+        return itens
 
     def select_mode(self, key: str) -> list[str]:
-        from gaia.controller.modes import get_persona
+        from gaia.bots import get_bot
 
-        if get_persona(key) is None:
+        bot = get_bot(key)
+        if bot is None:
             raise ValueError(f"modo desconhecido: {key}")
-        self.modo = key
-        return [f"modo ativo: {key}"]
+        self.modo = bot.id
+        return [f"modo ativo: {bot.name}"]
 
     def open_session(self, conversation_id: int) -> list[str]:
         self.abriu.append(conversation_id)
@@ -92,6 +108,30 @@ class FakeTarget:
             {"role": "user", "text": "oi"},
             {"role": "assistant", "text": "olá"},
         ]
+
+    # feed de atividade (fase 2) -----------------------------------------
+    def activity(self, limit: int = 50, bot: str = "") -> dict[str, Any]:
+        mensagens = [
+            {"id": 2, "bot": "donna", "kind": "job", "title": "Capitulo 2",
+             "text": "revisado", "when": "2026-11-25T10:00:00", "seen": False},
+            {"id": 1, "bot": "ariana", "kind": "job", "title": "Carteira",
+             "text": "PETR4 +2%", "when": "2026-11-25T09:00:00", "seen": True},
+        ]
+        if bot:
+            mensagens = [item for item in mensagens if item["bot"] == bot]
+        return {
+            "messages": mensagens[:limit],
+            "runs": [
+                {"id": 7, "bot": "donna", "kind": "bot_task", "status": "completed",
+                 "automation": "user:revisao", "when": "2026-11-25T10:00:00",
+                 "detail": "ok", "error": ""},
+            ],
+            "unread": {"donna": 1},
+        }
+
+    def mark_seen(self, bot: str = "") -> dict[str, Any]:
+        self.vistos.append(bot)
+        return {"ok": True, "unread": {} if not bot else {"ariana": 1}}
 
 
 def _pedir(
@@ -344,19 +384,69 @@ def test_engine_exige_credencial(servidor):
     assert _pedir(base, "GET", "/engine", cookie=_cookie_de(do_painel))[0] == 401
 
 
-def test_modes_lista_e_troca(servidor):
+def test_bots_lista_e_troca(servidor):
+    _, alvo, base, _ = servidor
+    status, corpo, _ = _pedir(base, "GET", "/bots", token="tok-chat")
+    assert status == 200
+    assert [b["id"] for b in corpo["bots"]] == ["gaia", "donna"]
+    assert corpo["bots"][0]["current"] is True
+    # Donna aparece indisponivel com motivo -- a tela pode explicar o clique.
+    assert corpo["bots"][1]["available"] is False
+    assert "workspace" in corpo["bots"][1]["reason"]
+
+    status, corpo, _ = _pedir(
+        base, "POST", "/bot/select", token="tok-chat", corpo={"id": "donna"}
+    )
+    assert status == 200
+    assert alvo.modo == "donna"
+    assert corpo["bot"] == "donna"
+    # FakeTarget nao tem `select_bot` (alvo antigo): o transporte cai no
+    # `select_mode`, que responde pelo mesmo registry.
+    assert corpo["messages"] == ["modo ativo: Donna Haraway"]
+    # A resposta traz o que a tela redesenha (bolhas, sessoes e bots).
+    assert corpo["history"] == [{"role": "user", "text": "oi"},
+                                {"role": "assistant", "text": "olá"}]
+    assert isinstance(corpo["sessions"], list)
+    assert corpo["bots"][1]["current"] is True
+
+    # `/modes` continua (compatibilidade) e le a MESMA lista.
+    status, corpo, _ = _pedir(base, "GET", "/modes", token="tok-chat")
+    assert status == 200
+    assert [m["key"] for m in corpo["modes"]] == ["gaia", "donna"]
+    assert corpo["modes"][1]["current"] is True
+
+
+def test_bot_desconhecido_e_400(servidor):
+    _, alvo, base, _ = servidor
+    status, corpo, _ = _pedir(
+        base, "POST", "/bot/select", token="tok-chat", corpo={"id": "inexistente"}
+    )
+    assert status == 400
+    assert corpo["error"] == "bot_failed"
+    assert alvo.modo == "gaia"
+
+
+def test_bot_vazio_e_400(servidor):
+    _, _, base, _ = servidor
+    status, corpo, _ = _pedir(base, "POST", "/bot/select", token="tok-chat", corpo={})
+    assert status == 400
+    assert corpo["error"] == "empty_bot"
+
+
+def test_mode_lista_e_troca(servidor):
+    """`POST /mode` e alias de `/bot/select` (mesmo registry)."""
     _, alvo, base, _ = servidor
     status, corpo, _ = _pedir(base, "GET", "/modes", token="tok-chat")
     assert status == 200
-    assert [m["key"] for m in corpo["modes"]] == ["assistente", "pesquisadora"]
+    assert [m["key"] for m in corpo["modes"]] == ["gaia", "donna"]
     assert corpo["modes"][0]["current"] is True
 
     status, corpo, _ = _pedir(
-        base, "POST", "/mode", token="tok-chat", corpo={"mode": "pesquisadora"}
+        base, "POST", "/mode", token="tok-chat", corpo={"mode": "donna"}
     )
     assert status == 200
-    assert alvo.modo == "pesquisadora"
-    assert corpo["messages"] == ["modo ativo: pesquisadora"]
+    assert alvo.modo == "donna"
+    assert corpo["messages"] == ["modo ativo: Donna Haraway"]
     assert corpo["engine"]["mode"] == "Assistente"  # health fake nao muda
 
 
@@ -367,7 +457,7 @@ def test_mode_desconhecido_e_400(servidor):
     )
     assert status == 400
     assert corpo["error"] == "mode_failed"
-    assert alvo.modo == "assistente"
+    assert alvo.modo == "gaia"
 
 
 def test_mode_vazio_e_400(servidor):
@@ -475,3 +565,41 @@ def test_automations_e_engine_com_centro(tmp_path: Path):
         assert mesmo["model"] == corpo["model"]
     finally:
         srv.shutdown()
+
+
+# ------------------------------------------------------- atividade (fase 2) ---
+
+
+def test_bots_activity_devolve_o_feed_e_exige_credencial(servidor):
+    _, _, base, _ = servidor
+    assert _pedir(base, "GET", "/bots/activity")[0] == 401
+
+    status, corpo, _ = _pedir(base, "GET", "/bots/activity?limit=10", token="tok-chat")
+    assert status == 200
+    assert [m["bot"] for m in corpo["messages"]] == ["donna", "ariana"]
+    assert corpo["unread"] == {"donna": 1}
+    assert corpo["runs"][0]["bot"] == "donna"
+
+    # Filtro por bot: o card do aside mostra so o ativo.
+    status, corpo, _ = _pedir(
+        base, "GET", "/bots/activity?bot=ariana", token="tok-chat"
+    )
+    assert status == 200
+    assert [m["bot"] for m in corpo["messages"]] == ["ariana"]
+
+
+
+
+def test_bot_seen_zera_o_badge(servidor):
+    _, alvo, base, _ = servidor
+    status, corpo, _ = _pedir(
+        base, "POST", "/bots/seen", token="tok-chat", corpo={"bot": "donna"}
+    )
+    assert status == 200
+    assert corpo == {"ok": True, "unread": {"ariana": 1}}
+    assert alvo.vistos == ["donna"]
+
+    status, corpo, _ = _pedir(base, "POST", "/bots/seen", token="tok-chat", corpo={})
+    assert status == 200
+    assert corpo["unread"] == {}
+    assert alvo.vistos == ["donna", ""]

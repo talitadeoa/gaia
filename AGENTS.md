@@ -45,7 +45,7 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 |---|---|
 | `gaia/cli.py`, `cli_parser.py`, `cli_commands.py`, `cli_integrations.py`, `cli_runtime.py`, `cli_serve.py` | entrada, subcomandos, bootstrap |
 | `gaia/config.py` | modelo de config (pydantic), env `GAIA_*`, migração legada, template TOML |
-| `gaia/agent/runtime.py` | loop do agente: provedor, streaming, ferramentas, permissões |
+| `gaia/agent/runtime.py` | loop do agente: provedor, streaming, ferramentas, permissões, **eventos por sessão** (`subscribe_session`) e **política por sessão** (`SessionPolicy`) |
 | `gaia/agent/session.py` | `AgentSession` e `SessionStore` (JSON em `sessions/`) |
 | `gaia/agent/providers/` | `factory.py` (presets), `openai_compat.py`, `anthropic.py` |
 | `gaia/agent/tools/` | `build_tools()` registra `read/list/glob/grep/write/edit/bash` + agenda/planilha/audiobook/estudos + `pi` (quando `[pi] enabled`) |
@@ -53,11 +53,13 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 | `gaia/controller/turns.py` | execução de um turno, eventos, permissão |
 | `gaia/controller/commands.py` | comandos de barra (`/status`, `/modelo`, `/sonhar`…) |
 | `gaia/controller/command_catalog.py` | catálogo dos comandos: ajuda do terminal, `GET /commands` e paleta do web |
-| `gaia/controller/modes.py` | personas/modos (prompt, não infraestrutura) |
+| `gaia/bots/registry.py` | `Bot` (id, nome, papel, diretriz, workspace, allowlist, escopo, modelo, aliases, `can_message`) + `DEFAULT_BOTS` dos cinco e `load_bots(cfg)` com validação dura; `bus.py` | `BotBus` (um bot pergunta a outro, profundidade 2) |
+| `gaia/controller/bots.py` | feed (`bot_activity`/`bot_seen`/`bot_message`), trava por bot e `run_bot_task` (segundo plano na sessão do bot, canal `job`) |
+| `gaia/controller/modes.py` | shim de compatibilidade: `Persona` derivado do registry e `ALIASES` (chaves antigas → id do bot) |
 | `gaia/controller/prompt.py` | prompt em camadas (prefixo estável + bloco dinâmico) |
 | `gaia/controller/initiative.py` | lembretes e check-in proativo; `briefing.py` | briefings |
 | `gaia/controller/memory.py` | consolidação diária e sonho |
-| `gaia/controller/automation_builder.py` | frase -> automacao: slots (dia/hora/skill/entrega), confianca por regra e gravacao em `automations` |
+| `gaia/controller/automation_builder.py` | frase -> automacao: slots (dia/hora/skill/entrega/bot), confianca por regra e gravacao em `automations` |
 | `gaia/memory/store.py` | SQLite (`gaia.db`, schema v11: conversations/turns/records/meta/reminders/**runs**/automations/routines/backlog_items) |
 | `gaia/memory/consolidation.py`, `dream.py` | memória do dia e sonho |
 | `gaia/secondbrain/` | índice FTS5, frontmatter, notas, embeddings opcionais |
@@ -68,6 +70,7 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 | `gaia/control/` | Control Center: `runs` (histórico), `skills`, `automations` (agenda + seed/load/retry), `routines` (rotinas contínuas: boot/laço/evento/varredura), `health`, `secrets`, `settings`, `providers`, `center` |
 | `gaia/controller/scheduler.py` | agendador único: lê `automations`, calcula `due()`, chama o handler da skill, faz retry e notifica falha; despacha as `user:*` pela coluna `skill` |
 | `gaia/agent/tools/automations.py` | ferramenta `criar_automacao` (aprovação obrigatória; só existe com `cfg`+`store`) |
+| `gaia/agent/tools/bots.py` | ferramenta `falar_com_bot` (só com o bus ligado; destino limitado a `can_message`) |
 | `gaia/controller/routines.py` | gate único (`_routine_on`) e "rodar agora" das rotinas contínuas; os laços dos mixins chamam por aqui |
 | `gaia/client/remote_client.py` | cliente `gaia --remote` |
 | `gaia/telegram/`, `whatsapp/`, `browser/` | canais e integrações |
@@ -95,7 +98,7 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   Brain, dos workers proativos e do poller do Telegram. Nunca rode dois
   processos com o mesmo banco nem dois pollers do Telegram (409 `getUpdates` e
   briefing duplicado).
-- **Canais têm escopo.** O modo ativo é salvo por canal (`mode` no `cli`,
+- **Canais têm escopo.** O bot ativo é salvo por canal (`mode` no `cli`,
   `mode@telegram`/`mode@serve` fora dele). `channel` é `cli`, `telegram` ou
   `serve`.
 - **Permissões são a fronteira de segurança.** `write`, `edit` e `bash` exigem
@@ -154,6 +157,13 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 - **Nova ferramenta:** crie o spec/handler em `gaia/agent/tools/`, registre em
   `build_tools()` e marque `requires_approval=True` se alterar algo. Adicione
   teste em `tests/test_agent.py` e, se for específica, no arquivo do domínio.
+- **Nova política de sessão (base dos bots):**
+  `client.set_session_policy(session_id, SessionPolicy(tools=...,
+  directory=..., scope=..., bot=...))` antes do primeiro turno. A allowlist da
+  política ganha da lista do turno; `scope` é o teto de
+  `read/write/edit/list/glob/grep` e `directory` é o `cwd` de `bash`/`pi`. A
+  política é persistida no JSON da sessão (`data/sessions/`), então sobrevive ao
+  restart. Registro declarativo (`gaia/bots/`) é a fase seguinte.
 - **Ferramenta `pi` (delegar codigo ao harness):** desligada por padrao em
   `[pi] enabled = false`. O pi roda com `cwd = pi.workspace` (padrao
   `~/pr-workspace`), **nunca** em `~/gaia`: o `gaia-deploy.timer` faz
@@ -231,6 +241,15 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `control/settings.update`, com backup). Qualquer mudanca nessa regra pede
   teste em `tests/test_backlog.py` (purga, rename, primeira sync, Agenda
   fora do ar, projeto sem repo).
+- **Bot e descritor, nao processo.** `Bot` (frozen) so carrega dados;
+  allowlist e `scope` sao a fronteira de seguranca e quem aplica e o
+  `AgentClient` via `SessionPolicy` (persistida no JSON da sessao). A politica
+  e reaplicada em **toda** ativacao, inclusive ao retomar conversa antiga —
+  senao a sessao da Donna volta com todas as ferramentas. `[bots.<id>]` no TOML
+  sobrepoe o default e configuracao invalida levanta no boot; default apontando
+  para pasta ausente deixa o bot **indisponivel** (409 + motivo em `GET /bots`),
+  nunca derruba a Gaia. `/modo` e `POST /mode` sao alias de `/bot` e
+  `POST /bot/select`, e as duas rotas leem o mesmo registry.
 - **Voz no web:** duas portas para o mesmo Whisper (`gaia/serve/voice.py`).
   `[serve] voice_source = "browser"` (padrao) faz o *navegador* gravar WAV
   16-bit mono e mandar em `POST /voice/upload` — o mini headless so transcreve;
@@ -279,7 +298,16 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `zh` (por compatibilidade) mas agora leva `traducao` e `lang`. Testes:
   `tests/test_serve_web.py` (rotas, evento por idioma), `test_orchestrator.py`
   (prompt/cache) e `test_textual_app.py` (rótulo na TUI).
-- **Novo modo:** `controller/modes.py` (`PERSONAS`) e teste em `test_modes.py`.
+- **Novo bot:** `gaia/bots/registry.py` (um `Bot` em `default_bots()` — id
+  curto e definitivo, porque vira `conversations.mode`, mais `tools`/`scope`/
+  `aliases`/`can_message`), `KNOWN_TOOLS` se a ferramenta for nova,
+  `tests/test_bots.py` e `tests/test_modes.py`. O TOML (`[bots.<id>]`) sobrepõe
+  o default sem tocar no código; `modes.py` não precisa mudar (é shim). Bot novo
+  entra no rail do web pela lista de `GET /bots`; seleção é `/bot <id>` (ou o
+  antigo `/modo`) ou `#b/<id>`. Ferramenta/scope/workspace são a fronteira de
+  segurança — prompt não é. `can_message` é a allowlist de `falar_com_bot`
+  (destino); a profundidade máxima é `gaia/bots/bus.py::MAX_DEPTH`.
+- **Nova persona/modo:** não existe mais. Modo = bot; ver a receita acima.
 - **Mudança no fluxo de deploy:** o script roda no mini
   (`deploy/gaia-deploy.sh` → `~/.local/bin/deploy-gaia`), as unidades são
   `deploy/gaia-deploy.service`/`.timer` e o `gmin deploy` só orquestra por SSH
@@ -309,12 +337,25 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   garantir "uma vez por dia". Ex.: `_check_estudos` (cobra estudo atrasado).
 - **Novo alvo do `criar_automacao`:** a lista fechada é `SKILL_REQUIRES`/
   `SKILL_NAMES` em `controller/automation_builder.py` (hoje `reminder`,
-  `agenda_summary`, `estudos_summary`) **mais** o par
+  `agenda_summary`, `estudos_summary`, `bot_task`) **mais** o par
   `USER_SKILL_METHODS`/`_user_automation_*` em `controller/scheduler.py`. Sem os
   dois lados a proposta grava uma linha `user:*` que o agendador não sabe
   executar. A confiança é por regra (`score`: skill+verbo+hora+dias+entrega);
   nunca peça ao modelo para "dar uma nota". Teste em
   `tests/test_automation_builder.py` e `tests/test_scheduler.py`.
+- **Automação por prompt (`bot_task`):** `run_bot_task(bot_id, prompt)` cria uma
+  conversa no canal `job` (não aparece em `/sessions`), aplica a política do bot
+  e grava `runs` + `bot_messages`. A trava é **por bot** (`bot_slot`); uma
+  sessão nunca tem dois turnos. Permissão pedida num job é negada na hora (D7).
+  O agendador checa `bot_busy(item.bot)`, não o `_busy` global: a Ariana não
+  espera a Ada. Testes: `tests/test_bots_activity.py` e `tests/test_scheduler.py`.
+- **Ariana entrega no painel:** `market:watchlist` grava `bot_messages` e o
+  Telegram é opcional (`Skill(requires=("briefing.market_enabled",))`). O feed
+  NÃO é o Telegram: sem cotação nenhuma o run vira `network` com os tickers.
+- **Bot falando com bot:** `BotBus.ask_sync` (ferramenta `falar_com_bot`) roda no
+  loop do motor via `run_coroutine_threadsafe`; a profundidade viaja em
+  `contextvars` (`DEPTH`), porque `to_thread` copia o contexto. `start_bot_bus`
+  no boot liga a ferramenta; sem bus não existe `falar_com_bot` no catálogo.
 - **Proteger branch no GitHub:** `scripts/branches-protegidas.sh` (usuário
   `talitadeoa`) aplica o ruleset `protege-branch-padrao` na branch padrao
   (`~DEFAULT_BRANCH`, cobre `main`/`master`): proibe `deletion` e
@@ -326,6 +367,20 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 
 ## Armadilhas já descobertas
 
+- **Eventos do agente são por sessão, não globais.** `AgentClient._emit` faz
+  fan-out para `subscribe_session(session_id)`; `_drain_events(session_id)`
+  limpa só a fila daquela sessão. Esvaziar a fila global num turno concorrente
+  apaga os eventos de outro turno, que fica mudo até o `stall_timeout` (sem
+  erro visível).
+- **`ToolContext.scope` é o teto de filesystem; `directory` é só o cwd.** Um
+  bot com `scope` que não contém o `workspace` escreve e não consegue ler o que
+  escreveu. `scope` fica depois dos campos antigos e antes de `bot_bus`/`bot`
+  de propósito: há chamador posicional em teste
+  (`ToolContext(dir, True, None, secondbrain)`), então campo novo entra no fim.
+- **Segundo plano tem trava por bot.** `bot_slot(bot)` serializa dois turnos na
+  mesma sessão (automacao + `falar_com_bot` no mesmo minuto); `bot_busy` só
+  devolve `True` para a sessão ocupada, nunca para todos. Um job nunca troca
+  `session_id`/`conversation_id` do motor: usa a sessão dele em `channel='job'`.
 - **SSE:** assine a fila **antes** de enviar os cabeçalhos; o cliente dispara no
   header e o evento se perde para sempre.
 - **Permissão:** quem espera é o `RemoteUI`, não o `Target`; o transporte resolve
@@ -398,6 +453,17 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   tem a tabela de status item por item — mantenha-a atualizada.
   A correcao de proatividade no `serve` (`owns_telegram`, `_speak` mudo em
   `serve`) esta aplicada (commit `12f15b1`).
+- Bots especialistas: **fases 0 a 4 feitas** (eventos por sessao,
+  `SessionPolicy`, schema v12, `text_extensions`; registry `gaia/bots/`,
+  `[bots.<id>]`, `select_bot`, `/bot` e `/bots`/`/bot/select`; rail
+  `#b/<bot>` e feed (`GET /bots/activity`, `POST /bots/seen`, evento
+  `bot_activity`); `automations.bot`/`runs.bot` com gate por bot; skill
+  `bot_task` + `run_bot_task` (canal `job`); Ariana entrega no painel;
+  `falar_com_bot`/`BotBus` com profundidade 2). O clone da dissertacao virou
+  `talitadeoa/dissertacao` em `~/dissertacao` e o TOML da maquina tem
+  `[bots.donna] scope = "~/dissertacao"` (sem symlink em
+  `~/SecondBrain/pesquisa`). Design em
+  `docs/plans/2026-11-24-bots-especialistas-design.md` (§7 tem o status).
 - Web do `serve` em paridade com a TUI: `instances.json` (mini/Mac),
   sessao de cookie no chat (`gaia_chat`) e no painel (`gaia_control`), seletor
   de instancia no header, modos, sessoes anteriores e proximas automacoes.

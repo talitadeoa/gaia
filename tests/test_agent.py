@@ -19,6 +19,7 @@ from gaia.agent.providers.base import (
 )
 from gaia.agent.providers.openai_compat import OpenAICompatibleProvider
 from gaia.agent.runtime import AgentClient
+from gaia.agent.session import SessionPolicy
 from gaia.agent.tools import ToolContext, build_tools
 from gaia.agent.tools.filesystem import edit, grep, read, write
 from gaia.agent.types import ChatMessage, ModelRef, ToolCall
@@ -490,3 +491,254 @@ def test_agent_tool_set_completo():
 def test_reasoning_delta_tipo_existe():
     delta = ReasoningDelta("pensando")
     assert delta.text == "pensando"
+
+
+# ------------------------------------------------- eventos e politica por sessao
+async def _consumir_turno(fila, timeout: float = 3.0) -> str:
+    """Le a fila da sessao ate o turno terminar e devolve o texto emitido."""
+    from gaia.agent.events import TextDelta as EventTextDelta
+    from gaia.agent.events import TurnCompleted, TurnFailed
+
+    partes: list[str] = []
+    while True:
+        evento = await asyncio.wait_for(fila.get(), timeout=timeout)
+        if isinstance(evento, EventTextDelta):
+            partes.append(evento.text)
+        elif isinstance(evento, (TurnCompleted, TurnFailed)):
+            return "".join(partes)
+
+
+async def test_dois_turnos_simultaneos_nao_roubam_eventos(tmp_path, isolated_env):
+    """Duas sessoes rodando ao mesmo tempo recebem exatamente os seus eventos.
+
+    Antes do fan-out por sessao, ``prompt_async`` zerava a fila global: o
+    segundo turno engolia os eventos do primeiro, que ficava mudo ate o
+    stall_timeout, sem nenhum erro visivel.
+    """
+    client = _client(tmp_path, isolated_env)
+    (tmp_path / "proj").mkdir()
+    provider = ScriptedProvider(
+        [
+            [TextDelta("primeira"), Finish("stop")],
+            [TextDelta("segunda"), Finish("stop")],
+        ]
+    )
+    client._provider = provider
+    sess_a = await client.create_session("a")
+    sess_b = await client.create_session("b")
+    fila_a = client.subscribe_session(sess_a.id)
+    fila_b = client.subscribe_session(sess_b.id)
+    try:
+        await client.prompt_async(sess_a.id, "um")
+        await client.prompt_async(sess_b.id, "dois")
+
+        assert await _consumir_turno(fila_a) == "primeira"
+        assert await _consumir_turno(fila_b) == "segunda"
+    finally:
+        client.unsubscribe_session(sess_a.id, fila_a)
+        client.unsubscribe_session(sess_b.id, fila_b)
+        await client.aclose()
+
+
+async def test_turno_em_andamento_nao_perde_evento_quando_outro_comeca(
+    tmp_path, isolated_env
+):
+    """O caso real do bug: A ja esta transmitindo quando B comeca.
+
+    ``prompt_async`` descarregava a fila global logo no inicio, entao os
+    eventos que A ja tinha emitido (e que ninguem leu ainda) sumiam quando B
+    entrava. Aqui A so responde depois que B ja comecou.
+    """
+    client = _client(tmp_path, isolated_env)
+    (tmp_path / "proj").mkdir()
+    liberar_a = asyncio.Event()
+
+    class GateProvider(ScriptedProvider):
+        async def stream(self, request):  # type: ignore[override]
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                await liberar_a.wait()
+                yield TextDelta("A terminou")
+            else:
+                yield TextDelta("B terminou")
+            yield Finish("stop")
+
+    provider = GateProvider([])
+    client._provider = provider
+    sess_a = await client.create_session("a")
+    sess_b = await client.create_session("b")
+    fila_a = client.subscribe_session(sess_a.id)
+    fila_b = client.subscribe_session(sess_b.id)
+    try:
+        await client.prompt_async(sess_a.id, "um")
+        consumidor_a = asyncio.create_task(_consumir_turno(fila_a))
+        await asyncio.sleep(0.05)  # A ja comecou (TurnStarted emitido)
+        await client.prompt_async(sess_b.id, "dois")
+        assert await _consumir_turno(fila_b) == "B terminou"
+
+        liberar_a.set()
+        assert await asyncio.wait_for(consumidor_a, timeout=3) == "A terminou"
+    finally:
+        client.unsubscribe_session(sess_a.id, fila_a)
+        client.unsubscribe_session(sess_b.id, fila_b)
+        await client.aclose()
+
+
+# ------------------------------------------------------ escopo de filesystem
+def test_scope_recusa_caminho_fora(tmp_path):
+    """O escopo e o teto de leitura/escrita; o diretorio e so o cwd."""
+    workspace = tmp_path / "dissertacao"
+    outra = tmp_path / "outra"
+    workspace.mkdir()
+    outra.mkdir()
+    (outra / "segredo.txt").write_text("x", encoding="utf-8")
+    ctx = ToolContext(workspace, scope=str(workspace))
+
+    with pytest.raises(ToolError, match="escopo"):
+        ctx.resolve(str(outra / "segredo.txt"))
+
+    # Caminho relativo continua nascendo no diretorio, e passa no escopo.
+    dentro = write({"path": "nota.md", "content": "oi"}, ctx)
+    assert dentro.ok and (workspace / "nota.md").is_file()
+
+
+def test_scope_permite_dentro(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("oi", encoding="utf-8")
+    ctx = ToolContext(workspace, scope=str(tmp_path))
+
+    assert read({"path": "a.txt"}, ctx).content == "oi"
+
+
+def test_sem_scope_nao_restringe(tmp_path):
+    """Sem escopo o comportamento antigo continua (allow_outside_project manda)."""
+    ctx = ToolContext(tmp_path, allow_outside_project=True, scope="")
+    assert ctx.resolve("/tmp").is_absolute()
+
+
+# ------------------------------------------------- politica por sessao (bot)
+async def test_policy_restringe_ferramenta(tmp_path, isolated_env):
+    """A allowlist da sessao vale de verdade, nao so no prompt."""
+    client = _client(tmp_path, isolated_env)
+    client.cfg.agent.auto_approve = True
+    ws = tmp_path / "donna"
+    ws.mkdir()
+    provider = ScriptedProvider(
+        [
+            [ToolCallDelta(0, "c1", "bash", '{"command": "pwd"}'), Finish("tool_calls")],
+            [TextDelta("ok"), Finish("stop")],
+        ]
+    )
+    client._provider = provider
+    session = await client.create_session("donna")
+    client.set_session_policy(
+        session.id,
+        SessionPolicy(tools=("read",), directory=str(ws), scope=str(ws), bot="donna"),
+    )
+    fila = client.subscribe_session(session.id)
+    try:
+        await client.prompt_async(session.id, "roda pwd")
+        await _consumir_turno(fila)
+        tool_msg = provider.requests[1].messages[-1]
+        assert tool_msg.role == "tool"
+        assert "indisponivel" in tool_msg.content
+    finally:
+        client.unsubscribe_session(session.id, fila)
+        await client.aclose()
+
+
+async def test_policy_aplica_diretorio_e_escopo(tmp_path, isolated_env):
+    """O cwd do bash e o teto do read vem da politica, nao do processo."""
+    client = _client(tmp_path, isolated_env)
+    client.cfg.agent.auto_approve = True
+    ws = tmp_path / "donna"
+    ws.mkdir()
+    (ws / "cap.md").write_text("capitulo", encoding="utf-8")
+    fora = tmp_path / "ada"
+    fora.mkdir()
+    provider = ScriptedProvider(
+        [
+            [
+                ToolCallDelta(0, "c1", "read", json.dumps({"path": str(fora / "x.md")})),
+                Finish("tool_calls"),
+            ],
+            [TextDelta("ok"), Finish("stop")],
+        ]
+    )
+    client._provider = provider
+    session = await client.create_session("donna")
+    client.set_session_policy(
+        session.id, SessionPolicy(tools=("read",), directory=str(ws), scope=str(ws))
+    )
+    fila = client.subscribe_session(session.id)
+    try:
+        await client.prompt_async(session.id, "le")
+        await _consumir_turno(fila)
+        tool_msg = provider.requests[1].messages[-1]
+        assert tool_msg.role == "tool"
+        assert "escopo" in tool_msg.content
+    finally:
+        client.unsubscribe_session(session.id, fila)
+        await client.aclose()
+
+
+async def test_policy_sobrevive_ao_reload(tmp_path, isolated_env):
+    """Sessao retomada do disco nao volta a ter todas as ferramentas."""
+    client = _client(tmp_path, isolated_env)
+    session = await client.create_session("donna")
+    client.set_session_policy(session.id, SessionPolicy(tools=("read",), bot="donna"))
+    sid = session.id
+    await client.aclose()
+
+    outro = _client(tmp_path, isolated_env)
+    try:
+        recarregada = outro._session(sid)
+        assert recarregada is not None
+        assert recarregada.policy is not None
+        assert recarregada.policy.tools == ("read",)
+        assert recarregada.policy.bot == "donna"
+    finally:
+        await outro.aclose()
+
+
+async def test_sem_policy_continua_com_todas_as_ferramentas(tmp_path, isolated_env):
+    """O caminho antigo (Gaia) nao muda de comportamento."""
+    client = _client(tmp_path, isolated_env)
+    info = await client.create_session("gaia")
+    try:
+        sessao = client._session(info.id)
+        assert sessao is not None
+        assert client._allowed_tools_for(sessao, None) == set(client.tools.names())
+    finally:
+        await client.aclose()
+
+
+async def test_tool_context_leva_o_bot_da_politica(tmp_path, isolated_env):
+    """O contexto do turno carrega o `bot` (origem de `falar_com_bot`)."""
+    client = _client(tmp_path, isolated_env)
+    session = await client.create_session("donna")
+    client.set_session_policy(session.id, SessionPolicy(tools=("read",), bot="donna"))
+    try:
+        sessao = client._session(session.id)
+        assert sessao is not None
+        contexto = client._tool_context_for(sessao)
+        assert contexto.bot == "donna"
+        assert "falar_com_bot" not in client.tools.names()
+    finally:
+        await client.aclose()
+
+
+async def test_set_bot_bus_liga_a_ferramenta(tmp_path, isolated_env):
+    """Sem bus a ferramenta nao existe; com bus entra no catalogo (uma vez)."""
+    client = _client(tmp_path, isolated_env)
+    try:
+        assert "falar_com_bot" not in client.tools.names()
+        bus = object()
+        client.set_bot_bus(bus)
+        client.set_bot_bus(bus)  # idempotente
+        nomes = list(client.tools.names())
+        assert nomes.count("falar_com_bot") == 1
+        assert client._tool_context.bot_bus is bus
+    finally:
+        await client.aclose()

@@ -33,7 +33,7 @@ from gaia.controller.prompt import (
 
 # --------------------------------------------------------------------- prompt
 def test_prefixo_estatico_nao_muda_com_a_hora():
-    persona = PERSONAS["assistente"]
+    persona = PERSONAS["gaia"]
     manha = compose_system(
         persona, "Prefiro respostas curtas.", now=datetime(2026, 11, 11, 9, 0)
     )
@@ -50,7 +50,7 @@ def test_prefixo_estatico_nao_muda_com_a_hora():
 
 
 def test_preferencia_que_repete_a_persona_e_removida():
-    persona = PERSONAS["trabalhadora"]
+    persona = PERSONAS["sabrina"]
     prefs = (
         f"- {persona.directive}\n"
         "- Prefiro respostas curtas.\n"
@@ -66,7 +66,7 @@ def test_preferencia_que_repete_a_persona_e_removida():
 
 def test_diretriz_concisa_entra_no_prefixo_e_pedido_curto_no_fim():
     composed = compose_system(
-        PERSONAS["assistente"],
+        PERSONAS["gaia"],
         concise=True,
         short_prompt=True,
         fast=True,
@@ -781,7 +781,7 @@ async def test_runtime_remove_tool_call_orfa_ao_abortar(tmp_path, isolated_env):
 
 
 def test_humor_alto_entra_no_prefixo_e_pode_ser_desligado():
-    persona = PERSONAS["assistente"]
+    persona = PERSONAS["gaia"]
     com_humor = compose_system(persona, humor="alto")
     sem_humor = compose_system(persona, humor="off")
 

@@ -22,8 +22,11 @@ from typing import Any, Protocol
 
 from gaia.agenda.client import AgendaClient
 from gaia.agent import AgentClient
+from gaia.agent.session import SessionPolicy
+from gaia.agent.types import ModelRef
 from gaia.audio.recorder import ContinuousListener, Recorder
 from gaia.backlog.worker import BacklogWorker
+from gaia.bots.registry import Bot
 from gaia.config import Config
 from gaia.control.automations import Automation
 from gaia.controller.goals import GoalTracker
@@ -361,6 +364,35 @@ class OrchestratorContract(ABC):
     async def select_mode(self, key: str) -> None:
         ...
 
+    @abstractmethod
+    async def select_bot(self, key: str) -> Bot:
+        ...
+
+    @abstractmethod
+    def modes(self) -> list[Persona]:
+        ...
+
+    # --- registry de bots e politica de sessao ---
+    @abstractmethod
+    def _bot_for_mode(self, mode: str) -> Bot | None:
+        ...
+
+    @abstractmethod
+    def _bot_directory(self, bot: Bot | None) -> Path:
+        ...
+
+    @abstractmethod
+    def _model_for(self, bot: Bot | None) -> ModelRef:
+        ...
+
+    @abstractmethod
+    def _policy_for(self, bot: Bot | None) -> SessionPolicy | None:
+        ...
+
+    @abstractmethod
+    def _apply_policy(self, session_id: str, policy: SessionPolicy) -> None:
+        ...
+
     # --- agendador (fase C) e handlers das automacoes ---
     @abstractmethod
     def start_scheduler(self) -> None:
@@ -452,6 +484,58 @@ class OrchestratorContract(ABC):
 
     @abstractmethod
     def backlog_set_repo(self, project: str, repo: str) -> dict[str, Any]:
+        ...
+
+    # --- feed de atividade dos bots (mixin proprio) ---
+    @property
+    @abstractmethod
+    def mode_key(self) -> str:
+        ...
+
+    @abstractmethod
+    def bot_status(self, bot: Bot) -> tuple[bool, str]:
+        ...
+
+    @abstractmethod
+    def bot_unavailable_message(self, bot: Bot, motivo: str) -> str:
+        ...
+
+    @abstractmethod
+    async def _open_session(
+        self, conversation_id: int, persona: Persona, bot: Bot | None = None
+    ) -> tuple[str, bool]:
+        ...
+
+    @abstractmethod
+    def bot_activity(self, limit: int = 30, bot: str = "") -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def bot_seen(self, bot: str = "") -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def bot_message(
+        self, bot: str, kind: str = "job", title: str = "", text: str = ""
+    ) -> int:
+        ...
+
+    @abstractmethod
+    def bot_busy(self, bot_id: str) -> bool:
+        ...
+
+    @abstractmethod
+    async def run_bot_task(
+        self,
+        bot_id: str,
+        prompt: str,
+        *,
+        title: str = "",
+        automation_id: str = "",
+        trigger: str = "schedule",
+        attempt: int = 1,
+        depth: int = 0,
+    ) -> dict[str, Any]:
         ...
 
     @abstractmethod

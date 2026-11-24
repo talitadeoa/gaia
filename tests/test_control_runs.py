@@ -132,6 +132,8 @@ def test_render_run_nao_vaza_campos_internos(store):
         "error",
         "error_kind",
         "attempt",
+        # `bot` e novo (schema v12/fase 3): a atribuicao da execucao ao bot.
+        "bot",
     }
 
 

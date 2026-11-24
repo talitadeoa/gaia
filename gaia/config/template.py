@@ -116,6 +116,9 @@ reindex_on_start = false        # ligue para reindexar a cada inicio
 backup_before_write = true
 default_folder = "Inbox"
 preferences_file = ""          # vazio => <secondbrain.path>/preferences.md
+# Extensoes lidas como texto puro (a Donna usa [".md", ".tex", ".bib"]).
+# .docx e .pdf ficam de fora: exigiriam biblioteca nova.
+text_extensions = [".md"]
 
 [interface]
 show_banner = true
@@ -298,6 +301,20 @@ daily_max = 4
 quiet_hours = "23:00-08:00"
 check_interval_seconds = 30.0
 reminders = true
+
+# Bots especialistas: o codigo (gaia/bots/registry.py) e a semente e este bloco
+# e a decisao. Cada bot tem conversa, sessao, allowlist e area de trabalho
+# proprias; nada aqui e processo (o `gaia serve` continua sendo o unico
+# escritor). Campo omitido herda o default do codigo. Os ids sao definitivos
+# (viram `conversations.mode`): gaia, donna, ariana, sabrina, ada.
+# Mal configurado (ferramenta inexistente, workspace/scope ausente, scope que
+# nao contem o workspace) levanta erro no boot -- bot nao sobe meio ligado.
+#[bots.donna]
+#name = "Donna Haraway"
+#workspace = "~/dissertacao"   # cwd do bash/pi
+#scope = "~/dissertacao"       # teto de read/write/edit/list/glob/grep
+#tools = ["read", "list", "glob", "grep", "write", "edit", "bash", "pi"]
+#model = ""                    # vazio = modelo global
 
 [serve]
 # `gaia serve`: o mini processa e guarda tudo; as telas so desenham.

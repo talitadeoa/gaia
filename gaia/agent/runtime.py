@@ -13,6 +13,7 @@ import json
 import logging
 import secrets
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +51,7 @@ from gaia.agent.providers import (
     normalize_provider,
     resolve_api_key,
 )
-from gaia.agent.session import AgentSession, SessionStore
+from gaia.agent.session import AgentSession, SessionPolicy, SessionStore
 from gaia.agent.tools import ToolContext, ToolResult, ToolSet, build_tools
 from gaia.agent.types import (
     AssistantMessage,
@@ -68,13 +69,17 @@ class AgentClient:
         self.directory = (directory or cfg.project_directory()).resolve()
         self._provider: Provider | None = None
         self._events: asyncio.Queue[Event] = asyncio.Queue()
+        # Uma fila por sessao para quem precisa de fluxo concorrente (segundo
+        # plano, bots). A fila global continua existindo para o caminho
+        # single-turn (TUI/`ask`), que e o de sempre.
+        self._session_queues: dict[str, list[asyncio.Queue[Event]]] = {}
         self._sessions: dict[str, AgentSession] = {}
         self._store = SessionStore(cfg.resolved_data_dir() / "sessions")
         self._tool_context = ToolContext(
-            self.directory,
-            cfg.agent.allow_outside_project,
-            cfg.agenda,
-            cfg.secondbrain.path,
+            directory=self.directory,
+            allow_outside_project=cfg.agent.allow_outside_project,
+            agenda=cfg.agenda,
+            secondbrain=cfg.secondbrain.path,
             audiobook=cfg.audiobook,
             estudos=cfg.estudos,
             pi=cfg.pi,
@@ -107,6 +112,79 @@ class AgentClient:
     def set_audiobook_watch(self, callback: Any) -> None:
         """Canal entrega o MP3: callback(task, job) quando a narracao termina."""
         self._tool_context.audiobook_watch = callback
+
+    def set_bot_bus(self, bus: Any) -> None:
+        """Liga `falar_com_bot` (o `BotBus` do Orchestrator, criado no boot).
+
+        Idempotente e chamado uma vez: sem este gancho a ferramenta nao entra no
+        catalogo, porque o bus precisa do Orchestrator (que nasce depois do
+        AgentClient). A allowlist por bot continua sendo quem decide se aquele
+        bot tem a ferramenta.
+        """
+        if bus is None:
+            return
+        self._tool_context.bot_bus = bus
+        if self.cfg.agent.tools and "falar_com_bot" not in self.tools.names():
+            from gaia.agent.tools.bots import build_bot_tools
+
+            self.tools.add(*build_bot_tools())
+
+    # -------------------------------------------------------------- politica
+    def set_session_policy(
+        self, session_id: str, policy: SessionPolicy | None
+    ) -> None:
+        """Fixa tools/diretorio/escopo de uma sessao (idempotente).
+
+        A politica vale a partir do proximo turno e e persistida junto da
+        sessao: reiniciar o processo nao devolve as ferramentas todas para um
+        bot restrito.
+        """
+        session = self._session(session_id)
+        if session is None:
+            raise AgentError(f"sessao nao encontrada: {session_id}")
+        session.policy = policy
+        self._save(session)
+
+    def _allowed_tools_for(
+        self, session: AgentSession, tool_names: tuple[str, ...] | None
+    ) -> set[str] | None:
+        """Catalogo efetivo do turno: politica da sessao > pedido do turno > tudo.
+
+        A politica vem primeiro porque e barreira de seguranca: um turno nao
+        consegue ampliar o que o bot nao tem.
+        """
+        policy = session.policy
+        if policy is not None and policy.tools is not None:
+            catalogo = set(policy.tools)
+            if tool_names is not None:
+                catalogo &= set(tool_names)
+            return catalogo
+        if tool_names is not None:
+            return set(tool_names)
+        return set(self.tools.names())
+
+    def _tool_context_for(self, session: AgentSession) -> ToolContext:
+        """Contexto de ferramentas do turno: diretorio/escopo/bot da politica.
+
+        Substitui os campos por sessao sem mexer no contexto global (que
+        continua sendo o do `gaia`, com todas as integracoes). O `bot` da
+        politica e a origem de uma chamada entre bots (`falar_com_bot`).
+        """
+        policy = session.policy
+        if policy is None:
+            return self._tool_context
+        if not (policy.directory or policy.scope or policy.bot):
+            return self._tool_context
+        return replace(
+            self._tool_context,
+            directory=(
+                Path(policy.directory).expanduser()
+                if policy.directory
+                else self._tool_context.directory
+            ),
+            scope=policy.scope,
+            bot=policy.bot,
+        )
 
     # ------------------------------------------------------------------ config
     @property
@@ -378,7 +456,9 @@ class AgentClient:
         self._ensure_provider()
         if session.busy:
             raise AgentError("a sessao ja esta executando; aguarde ou interrompa")
-        self._drain_events()
+        # Limpa so a fila desta sessao: a global pode ter eventos de outro
+        # turno em andamento (segundo plano).
+        self._drain_events(session_id)
         session.busy = True
         task = asyncio.create_task(
             self._run_turn(
@@ -428,12 +508,46 @@ class AgentClient:
 
     def _emit(self, event: Event) -> None:
         self._events.put_nowait(event)
+        # Fan-out: cada assinante da sessao recebe a propria copia. Sem isso,
+        # dois turnos simultaneos disputam a fila global e um deles fica mudo.
+        for fila in list(self._session_queues.get(event.session_id, ())):
+            fila.put_nowait(event)
 
-    def _drain_events(self) -> None:
-        """Descarta eventos pendentes de um turno anterior interrompido."""
+    def subscribe_session(self, session_id: str) -> asyncio.Queue[Event]:
+        """Fila so desta sessao. Quem assina precisa desassinar no `finally`."""
+        fila: asyncio.Queue[Event] = asyncio.Queue()
+        self._session_queues.setdefault(session_id, []).append(fila)
+        return fila
+
+    def unsubscribe_session(
+        self, session_id: str, fila: asyncio.Queue[Event]
+    ) -> None:
+        filas = self._session_queues.get(session_id)
+        if not filas:
+            return
+        if fila in filas:
+            filas.remove(fila)
+        if not filas:
+            self._session_queues.pop(session_id, None)
+
+    def _drain_events(self, session_id: str = "") -> None:
+        """Descarta eventos pendentes de um turno anterior interrompido.
+
+        Com ``session_id`` limpa so as filas daquela sessao. A fila global so e
+        limpa quando o chamador nao pede sessao: limpar a global num turno
+        concorrente apagaria eventos de outro turno.
+        """
+        if session_id:
+            for fila in list(self._session_queues.get(session_id, ())):
+                self._descartar(fila)
+            return
+        self._descartar(self._events)
+
+    @staticmethod
+    def _descartar(fila: asyncio.Queue[Event]) -> None:
         while True:
             try:
-                self._events.get_nowait()
+                fila.get_nowait()
             except asyncio.QueueEmpty:
                 return
 
@@ -643,9 +757,7 @@ class AgentClient:
             turn_usage = await self._compact_history(session)
             session.messages.append(ChatMessage(role="user", content=text))
             user_index = len(session.messages) - 1
-            session.allowed_tools = (
-                set(tool_names) if tool_names is not None else set(self.tools.names())
-            )
+            session.allowed_tools = self._allowed_tools_for(session, tool_names)
             system_text = system
             if session.summary:
                 system_text = (
@@ -852,7 +964,10 @@ class AgentClient:
             )
         )
         try:
-            result = await asyncio.to_thread(tool.handler, call.arguments, self._tool_context)
+            contexto = self._tool_context_for(session)
+            result = await asyncio.to_thread(
+                tool.handler, call.arguments, contexto
+            )
         except ToolError as exc:
             result = ToolResult.failure(str(exc))
         except Exception as exc:  # pragma: no cover - depende do ambiente
@@ -925,6 +1040,21 @@ class AgentClient:
                 continue
             yield event
 
+    async def stream_session_events(
+        self, session_id: str, stop: asyncio.Event | None = None
+    ) -> AsyncIterator[Event]:
+        """Eventos de uma sessao especifica (assinante proprio, sem disputa)."""
+        fila = self.subscribe_session(session_id)
+        try:
+            while not (stop and stop.is_set()):
+                try:
+                    event = await asyncio.wait_for(fila.get(), timeout=0.5)
+                except TimeoutError:
+                    continue
+                yield event
+        finally:
+            self.unsubscribe_session(session_id, fila)
+
     def _latest_assistant(self, session_id: str) -> AssistantMessage | None:
         session = self._session(session_id)
         if session is None:
@@ -946,6 +1076,7 @@ class AgentClient:
 
     # ------------------------------------------------------------------- fim
     async def aclose(self) -> None:
+        self._session_queues.clear()
         for session in list(self._sessions.values()):
             if session.task is not None and not session.task.done():
                 session.cancel.set()

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import types
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -582,17 +583,22 @@ async def test_unknown_command_warns(orch):
 
 
 @pytest.mark.asyncio
-async def test_mode_command_without_argument_lists_modes(orch):
-    await orch._handle_command("/modo")
+@pytest.mark.parametrize("comando", ["/bot", "/modo"])
+async def test_comando_sem_argumento_lista_os_bots(orch, comando):
+    await orch._handle_command(comando)
     infos = orch.ui.called("info")
-    assert any("modo atual" in args[0] for args, _ in infos)
+    assert any("bot atual" in args[0] for args, _ in infos)
+    # Os cinco ids do registry aparecem na lista (nao so o ativo).
+    texto = " ".join(args[0] for args, _ in infos)
+    for bot_id in ("gaia", "donna", "ariana", "sabrina", "ada"):
+        assert bot_id in texto
 
 
 @pytest.mark.asyncio
-async def test_switching_to_unknown_mode_warns(orch):
-    await orch._switch_mode("nao-existe")
+async def test_switching_to_unknown_bot_warns(orch):
+    await orch._switch_bot("nao-existe")
     warnings = orch.ui.called("warning")
-    assert warnings and "modo desconhecido" in warnings[-1][0][0]
+    assert warnings and "bot desconhecido" in warnings[-1][0][0]
 
 
 @pytest.mark.asyncio
@@ -640,11 +646,13 @@ def test_find_task_matches_id_and_title(orch):
 
 
 class RecordingClient(FakeClient):
-    """Cria sessoes com atraso para expor intercalacoes entre trocas de modo."""
+    """Cria sessoes com atraso para expor intercalacoes entre trocas de bot."""
 
     def __init__(self) -> None:
         super().__init__()
         self.created: dict[str, str] = {}
+        self.diretorios: dict[str, str] = {}
+        self.policies: dict[str, object] = {}
 
     async def create_session(self, title: str | None = None, **kwargs):
         await asyncio.sleep(0.01)
@@ -652,27 +660,58 @@ class RecordingClient(FakeClient):
         self.created[session_id] = title or ""
         return types.SimpleNamespace(id=session_id)
 
+    def set_session_policy(self, session_id: str, policy) -> None:
+        self.policies[session_id] = policy
+
 
 @pytest.mark.asyncio
-async def test_trocas_concorrentes_de_modo_nao_cruzam_sessoes(orch):
+async def test_trocas_concorrentes_de_bot_nao_cruzam_sessoes(orch, tmp_path):
+    # Os bots de trabalho (donna/sabrina) dependem de pasta real: aponta os
+    # workspaces para tmp_path em vez de exigir ~/dissertacao na maquina.
+    for bot_id in ("donna", "sabrina"):
+        bot = orch.bots[bot_id]
+        pasta = tmp_path / bot_id
+        pasta.mkdir()
+        orch.bots[bot_id] = replace(bot, workspace=str(pasta), scope=str(pasta))
     client = RecordingClient()
     orch.client = client
 
-    await asyncio.gather(orch.select_mode("trabalhadora"), orch.select_mode("pesquisadora"))
+    await asyncio.gather(orch.select_bot("sabrina"), orch.select_bot("donna"))
 
-    trabalhadora = orch.store.get_or_create_conversation(str(orch.directory), "trabalhadora")
-    pesquisadora = orch.store.get_or_create_conversation(str(orch.directory), "pesquisadora")
-    sid_trabalhadora = trabalhadora["agent_session_id"]
-    sid_pesquisadora = pesquisadora["agent_session_id"]
+    sabrina = orch.store.get_or_create_conversation(str(orch.directory), "sabrina")
+    donna = orch.store.get_or_create_conversation(str(orch.directory), "donna")
+    sid_sabrina = sabrina["agent_session_id"]
+    sid_donna = donna["agent_session_id"]
 
-    assert sid_trabalhadora and sid_pesquisadora
-    assert sid_trabalhadora != sid_pesquisadora
-    assert "Trabalhadora" in client.created[sid_trabalhadora]
-    assert "Pesquisadora" in client.created[sid_pesquisadora]
+    assert sid_sabrina and sid_donna
+    assert sid_sabrina != sid_donna
+    assert "Sabrina Carpenter" in client.created[sid_sabrina]
+    assert "Donna Haraway" in client.created[sid_donna]
+    # A politica da sessao e aplicada na criacao (antes de qualquer turno).
+    assert client.policies[sid_donna].bot == "donna"
+    assert client.policies[sid_donna].tools == orch.bots["donna"].tools
+    assert client.policies[sid_sabrina].bot == "sabrina"
 
     atual = orch.store.get_conversation(orch.conversation_id)
     assert atual["mode"] == orch.persona.key
     assert atual["agent_session_id"] == orch.session_id
+
+
+@pytest.mark.asyncio
+async def test_select_mode_antigo_resolve_para_o_bot(orch, tmp_path):
+    """`select_mode("trabalhadora")` continua funcionando (compatibilidade)."""
+    bot = orch.bots["sabrina"]
+    pasta = tmp_path / "cv"
+    pasta.mkdir()
+    orch.bots["sabrina"] = replace(bot, workspace=str(pasta), scope=str(pasta))
+    client = RecordingClient()
+    orch.client = client
+
+    await orch.select_mode("trabalhadora")
+
+    assert orch.persona.key == "sabrina"
+    conversa = orch.store.get_conversation(orch.conversation_id)
+    assert conversa["mode"] == "sabrina"
 
 
 class ForeignDirectoryClient(FakeClient):

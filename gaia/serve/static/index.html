@@ -98,8 +98,51 @@
   #auto-rotinas > h3 { font-size: 12px; margin: 6px 0 0; color: var(--dim);
                        text-transform: uppercase; letter-spacing: .06em; }
   .ligado { color: var(--accent); }
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: 0; }
-  @media (max-width: 820px) { main { grid-template-columns: 1fr; } aside { display: none; } }
+  main { display: grid; grid-template-columns: auto minmax(0, 1fr) 320px; min-height: 0; }
+  @media (max-width: 820px) {
+    main { grid-template-columns: auto minmax(0, 1fr); }
+    aside { display: none; }
+  }
+  /* Rail dos bots: inicial em circulo + nome completo (o id so no tooltip).
+     Clicar navega pelo hash (`#b/<id>`), entao F5 e o voltar continuam. */
+  #rail-bots { border-right: 1px solid var(--line); background: var(--panel);
+               display: flex; flex-direction: column; gap: 6px; padding: 10px 6px;
+               overflow-y: auto; min-width: 0; }
+  #rail-bots[hidden] { display: none; }
+  #rail-bots button.bot {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid transparent;
+    background: none; color: var(--dim); border-radius: 10px; cursor: pointer; text-align: left;
+    font: inherit; font-size: 12.5px; white-space: nowrap; max-width: 16ch;
+  }
+  #rail-bots button.bot:hover { border-color: var(--line); color: var(--fg); }
+  #rail-bots button.bot.atual { color: var(--fg); border-color: var(--accent);
+                                background: var(--panel2); }
+  #rail-bots button.bot.indisponivel { opacity: .45; cursor: not-allowed; }
+  #rail-bots .inicial {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 999px; display: inline-flex;
+    align-items: center; justify-content: center; background: var(--panel2);
+    border: 1px solid var(--line); font-weight: 600; font-size: 12px;
+  }
+  #rail-bots button.bot.atual .inicial { background: var(--accent); color: #06110b;
+                                        border-color: var(--accent); }
+  #rail-bots .nome-bot { overflow: hidden; text-overflow: ellipsis; }
+  /* Indicador de "rodando" e badge de nao-lido (o nome nao pode ser cortado). */
+  #rail-bots .sinal { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+  #rail-bots .rodando { width: 7px; height: 7px; border-radius: 999px; background: var(--warn);
+                        animation: pulso 1.2s ease-in-out infinite; }
+  #rail-bots .badge { font-size: 10.5px; font-family: var(--mono); background: var(--err);
+                      color: #16060a; border-radius: 999px; padding: 0 6px; min-width: 16px;
+                      text-align: center; }
+  /* Feed de atividade: cartao do aside, recolhido por padrao. */
+  .atividade { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+               background: var(--bg); display: flex; flex-direction: column; gap: 8px; }
+  .atividade .topo { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .atividade .topo .nome { font-size: 13px; font-weight: 600; }
+  .atividade ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
+                  gap: 6px; max-height: 32vh; overflow-y: auto; }
+  .atividade li { font-size: 12px; border-left: 2px solid var(--line); padding-left: 8px; }
+  .atividade li .quando { color: var(--dim); font-family: var(--mono); font-size: 10.5px; }
+  .atividade li .texto { white-space: pre-wrap; overflow-wrap: anywhere; }
   #chat { overflow-y: auto; padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 12px; }
   aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto;
           padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -330,10 +373,16 @@
 </header>
 
 <main id="view-chat">
+  <!-- Rail dos bots: montado a partir de `GET /bots` (nunca lista fixa). O
+       clique navega por `#b/<id>`; o nome completo e o que define o bot. -->
+  <nav id="rail-bots" aria-label="bots" hidden></nav>
   <section id="chat" aria-live="polite"></section>
   <aside>
     <div id="motor"></div>
     <div id="automacoes"></div>
+    <!-- Feed de atividade dos bots (resultado de segundo plano e recados).
+         Recolhido por padrao; o badge do rail e que chama atencao. -->
+    <div id="bot-atividade" hidden></div>
     <!-- Backlog: paginas da Agenda + itens do chat, despachados ao pi (PR).
          O card em si e montado por `backlogCard()` (o mesmo da tela). -->
     <div id="backlog-card" hidden></div>
@@ -517,6 +566,12 @@ const estado = {
     card: { texto: "", projeto: "", repo: "" },
     agenda: { texto: "", projeto: "", repo: "" },
   },
+  // Bots (fase 2): rail com nome completo, badge de nao-lido e "rodando".
+  // `bots` vem de `GET /bots`; o bot ativo e o do motor (`engine.bot`).
+  bots: [],
+  bot: "",          // id do bot ativo (o hash `#b/<id>` so navega)
+  atividade: null,   // ultimo `GET /bots/activity`
+  atividadeAberta: false,
 };
 
 // Markdown mínimo e seguro: escapa tudo e depois reabilita três marcas.
@@ -734,6 +789,174 @@ function pintarMotor(engine) {
 
   $("#modo").textContent = dados.mode ? "modo: " + dados.mode : "";
   $("#motor").replaceChildren(header.cartao(dados));
+  // O motor e a fonte do bot ativo (o hash so navega): sem isto, recarregar a
+  // pagina em `#b/donna` com a Donna ativa nao pintaria o rail direito.
+  if (dados.bot) estado.bot = dados.bot;
+}
+
+/* ------------------------------------------------------------------- bots */
+/** Inicial do nome completo (o rail mostra "Donna Haraway", nao "donna"). */
+function inicialDe(nome) {
+  const partes = texto(nome).trim().split(/\s+/).filter(Boolean);
+  return (partes.length > 1
+    ? partes[0][0] + partes[1][0]
+    : (partes[0] || "?").slice(0, 1)).toUpperCase();
+}
+
+/**
+ * Monta o rail a partir de `GET /bots` (a tela nunca fixa a lista).
+ *
+ * O badge e o nao-lido por bot e o ponto e o "rodando" do bot ativo. Bot
+ * indisponivel aparece apagado com o motivo no tooltip: o clique nao troca (a
+ * rota responderia 409 e o rail nao pode mentir).
+ */
+function pintarRail(bots) {
+  estado.bots = Array.isArray(bots) ? bots : [];
+  const rail = $("#rail-bots");
+  if (!estado.bots.length) {
+    rail.hidden = true;
+    rail.replaceChildren();
+    return;
+  }
+  rail.hidden = false;
+  rail.replaceChildren(...estado.bots.map((bot) => {
+    const atual = bot.id === estado.bot;
+    const naoLidos = Number(bot.unread || 0);
+    return window.Gaia.el("button", {
+      class: "bot" + (atual ? " atual" : "") + (bot.available === false ? " indisponivel" : ""),
+      type: "button",
+      title: bot.available === false
+        ? bot.id + " — indisponível: " + texto(bot.reason)
+        : bot.id + " — " + texto(bot.role),
+      "data-bot": bot.id,
+      // O hash e a fonte de verdade: clicar NAVEGA para `#b/<id>` e o
+      // `hashchange` pede a troca (F5 e o voltar do navegador continuam).
+      onclick: () => { location.hash = "#b/" + bot.id; },
+    },
+      window.Gaia.el("span", { class: "inicial" }, inicialDe(bot.name)),
+      window.Gaia.el("span", { class: "nome-bot" }, bot.name || bot.id),
+      window.Gaia.el("span", { class: "sinal" },
+        bot.busy ? window.Gaia.el("span", { class: "rodando", title: "rodando agora" }) : null,
+        naoLidos
+          ? window.Gaia.el("span", { class: "badge", title: naoLidos + " não lida(s)" }, String(naoLidos))
+          : null),
+    );
+  }));
+}
+
+/** Carrega o rail e o feed (falha nao derruba a conversa nem o chat). */
+async function carregarBots() {
+  try {
+    const dados = await api("/bots");
+    const bots = Array.isArray(dados.bots) ? dados.bots : [];
+    // O motor manda no bot ativo; o hash so navega (o rail pinta o atual).
+    const atual = bots.find((bot) => bot.current);
+    if (atual) estado.bot = atual.id;
+    pintarRail(bots);
+  } catch (erro) {
+    if (erro.status === 401) return tratar401(erro);
+    pintarRail([]);
+  }
+  carregarAtividade();
+}
+
+/** Troca o bot ativo: `POST /bot/select` redesenha bolhas, sessao e rail. */
+async function trocarBot(chave) {
+  if (!chave || chave === estado.bot) return;
+  try {
+    const dados = await api("/bot/select", {
+      method: "POST", body: JSON.stringify({ id: chave }),
+    });
+    estado.bot = dados.bot || chave;
+    if (dados.engine) pintarMotor(dados.engine);
+    desenharHistorico(dados.history);
+    if (Array.isArray(dados.bots)) pintarRail(dados.bots);
+    aviso("success", (dados.messages || [])[0] || "bot: " + chave);
+    carregarAtividade();
+  } catch (erro) {
+    if (erro.status === 401) return tratar401(erro);
+    if (erro.status === 409) {
+      aviso("warning", texto(erro.corpo && erro.corpo.message)
+        || "o bot não está disponível agora.");
+      return;
+    }
+    aviso("error", "não consegui trocar de bot: " + texto(erro.message));
+  }
+}
+
+/* -------------------------------------------------------- feed de atividade */
+const ATIVIDADE_ICONE = { job: "⚙", inter_bot: "↔", aviso: "!" };
+
+/** Carrega `GET /bots/activity` (falha = card some; nunca inventa feed). */
+async function carregarAtividade() {
+  try {
+    estado.atividade = await api("/bots/activity?limit=30");
+  } catch (erro) {
+    if (erro.status === 401) return tratar401(erro);
+    estado.atividade = null;
+  }
+  pintarAtividade();
+}
+
+/** Desenha o card recolhivel: so o bot ativo aparece (o badge cobre os outros). */
+function pintarAtividade() {
+  const alvo = $("#bot-atividade");
+  const dados = estado.atividade;
+  if (!dados) {
+    alvo.replaceChildren();
+    alvo.hidden = true;
+    return;
+  }
+  alvo.hidden = false;
+  const meu = (dados.messages || []).filter((item) => !estado.bot || item.bot === estado.bot);
+  const naoLidos = Number((dados.unread || {})[estado.bot] || 0);
+  const aberto = estado.atividadeAberta;
+  const alternar = () => {
+    estado.atividadeAberta = !estado.atividadeAberta;
+    pintarAtividade();
+    // Abrir o feed do bot ativo zera o badge dele (marca como visto no motor).
+    if (estado.atividadeAberta && estado.bot) marcarVisto(estado.bot);
+  };
+  const linhas = meu.slice(0, aberto ? 20 : 0).map((item) =>
+    window.Gaia.el("li", {},
+      window.Gaia.el("div", { class: "quando" },
+        (ATIVIDADE_ICONE[item.kind] || "·") + " " + horaCurta(item.when)
+        + (item.title ? " · " + item.title : "")),
+      item.seen ? null : window.Gaia.el("span", { class: "badge" }, "nova"),
+      window.Gaia.el("div", { class: "texto" }, item.text)));
+  alvo.replaceChildren(window.Gaia.el("div", { class: "atividade" },
+    window.Gaia.el("div", { class: "topo", onclick: alternar },
+      window.Gaia.el("span", { class: "nome" }, "atividade de " + (estado.bot || "gaia")),
+      window.Gaia.el("span", { class: "dica" },
+        meu.length ? meu.length + " item(ns)" : "nada ainda"),
+      naoLidos ? window.Gaia.el("span", { class: "badge" }, String(naoLidos)) : null,
+      window.Gaia.el("span", { class: "seta dica" }, aberto ? "▴" : "▾")),
+    aberto
+      ? (linhas.length
+        ? window.Gaia.el("ul", {}, linhas)
+        : window.Gaia.el("p", { class: "dica" }, "o bot ainda não produziu nada."))
+      : null,
+  ));
+}
+
+/** Marca como visto no motor (o badge do rail some na hora). */
+async function marcarVisto(bot) {
+  try {
+    const dados = await api("/bots/seen", {
+      method: "POST", body: JSON.stringify({ bot: bot || "" }),
+    });
+    if (estado.atividade && dados.unread) {
+      estado.atividade.unread = dados.unread;
+      estado.atividade.messages = (estado.atividade.messages || []).map((item) =>
+        (!bot || item.bot === bot) ? { ...item, seen: true } : item);
+    }
+    pintarRail(estado.bots.map((item) => ({
+      ...item, unread: (dados.unread || {})[item.id] || 0,
+    })));
+    pintarAtividade();
+  } catch (erro) {
+    if (erro.status === 401) tratar401(erro);
+  }
 }
 
 async function carregarEngine() {
@@ -808,10 +1031,21 @@ function autoTag(status) {
 
 /* -------------------------------------------------- telas próprias --- */
 
-/** Qual tela propria esta aberta? O hash e a unica fonte de verdade. */
+/** Qual tela propria esta aberta? O hash e a unica fonte de verdade.
+ *
+ * `#b/<bot>` NAO e uma tela: o rail e a conversa vivem no chat. O hash so diz
+ * qual thread abrir ao trocar de bot (F5 e o voltar do navegador continuam).
+ */
 function telaAtual() {
   const rotas = { "#automacoes": "automacoes", "#backlog": "backlog" };
+  if (/^#b\/[a-z0-9_-]+$/.test(location.hash)) return "chat";
   return rotas[location.hash] || "chat";
+}
+
+/** Id do bot pedido pelo hash (`#b/donna` -> "donna"; vazio = nada). */
+function botDoHash() {
+  const achado = /^#b\/([a-z0-9_-]+)$/.exec(location.hash);
+  return achado ? achado[1] : "";
 }
 
 /** Mostra/oculta o chat e as telas proprias conforme o hash. */
@@ -987,6 +1221,9 @@ function linhaAutomacao(item) {
   const quando = item.next_run ? "próxima " + dataCurta(item.next_run) : "sem próxima execução";
   const janela = item.at && item.until ? item.at + "–" + item.until : "sem janela";
   const meta = [
+    // O dono da automacao vem do servidor (`bot`, vazio = gaia): a tela nao
+    // deduz pelo nome nem pelo id.
+    item.bot || "gaia",
     janela,
     item.days_label || "",
     item.delivery ? "entrega " + item.delivery : "",
@@ -1773,6 +2010,12 @@ function tratarEvento(evento) {
       // O worker avisa quando pega/termina um item: o card se redesenha sem
       // esperar o polling. PR pronto e falha ja viram mensagem proativa.
       carregarBacklog();
+      break;
+    case "bot_activity":
+      // Resultado de segundo plano (job) ou recado entre bots. Nao entra na
+      // conversa: bot alheio so acende o badge; o texto vive no feed.
+      carregarAtividade();
+      carregarBots();
       break;
     case "stream_begin":
       estado.fluxo = bolha("say", "", "gaia");
@@ -2884,6 +3127,7 @@ $("#login").addEventListener("close", async () => {
   // aparecia depois de um F5 (o boot tinha desistido antes da sessao).
   carregarAutomacoes();
   carregarBacklog();
+  carregarBots();
   pintarTelaAtual();
 });
 
@@ -3000,7 +3244,12 @@ $("#q").addEventListener("input", () => {
 });
 
 /* Troca de tela pelo hash: voltar/avancar do navegador nao recarrega a pagina. */
-window.addEventListener("hashchange", pintarTelaAtual);
+window.addEventListener("hashchange", () => {
+  pintarTelaAtual();
+  // `#b/<bot>` pede a thread daquele bot (o clique no rail tambem navega).
+  const pedido = botDoHash();
+  if (pedido && pedido !== estado.bot) trocarBot(pedido);
+});
 
 /* ------------------------------------------------------------------- boot */
 (async function iniciar() {
@@ -3015,9 +3264,15 @@ window.addEventListener("hashchange", pintarTelaAtual);
   carregarComandos();
   carregarAutomacoes();
   carregarBacklog();
+  // Await: o hash `#b/<bot>` e comparado com o bot que o motor devolveu.
+  await carregarBots();
   conectar();
   // O hash e a fonte de verdade das telas (`#automacoes`, `#backlog`): F5,
   // link e o voltar/avancar do navegador continuam na mesma tela.
+  // `#b/<bot>` e lido aqui (thread do bot ao abrir a pagina), mas quem manda
+  // no bot ativo e o motor: o hash so pede a troca quando difere.
+  const pedido = botDoHash();
+  if (pedido && pedido !== estado.bot) trocarBot(pedido);
   pintarTelaAtual();
 })();
 </script>

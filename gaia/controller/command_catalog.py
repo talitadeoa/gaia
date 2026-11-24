@@ -47,8 +47,14 @@ COMMANDS: tuple[Command, ...] = (
         True,
     ),
     Command(
+        "/bot [nome]",
+        "lista ou troca o bot ativo (gaia, donna, ariana, sabrina, ada)",
+        ("/bot", "/bots"),
+        True,
+    ),
+    Command(
         "/modo [nome]",
-        "lista ou troca o modo (pesquisadora, trabalhadora, investidora, assistente)",
+        "alias antigo de /bot (mesmos bots, apelidos e chaves antigas)",
         ("/modo", "/perfil", "/persona"),
         True,
     ),

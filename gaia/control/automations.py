@@ -89,6 +89,9 @@ class Automation:
     # Parametros do handler (automacoes `user:*` criadas pelo chat). Vazio nas
     # do registry: nelas quem manda e a config.
     params: dict[str, Any] = field(default_factory=dict)
+    # Bot dono da automacao (design §4.5). Vazio = `gaia`, o comportamento de
+    # antes dos bots; a coluna da tabela vem depois do seed.
+    bot: str = ""
 
     def claim_key(self, day: datetime) -> str:
         """Chave de ``claim_meta`` equivalente a usada pela rotina real."""
@@ -227,6 +230,8 @@ def describe(cfg: Config) -> list[Automation]:
     """Agenda declarada, derivada do config atual (semente da tabela).
 
     A ordem segue a do dia real: briefing, carteira, vagas, memoria/sonho.
+    ``bot`` e o dono de cada automacao: a tela agrupa por ele e o scheduler so
+    bloqueia a automacao do bot ocupado (design §4.5).
     """
     briefing = cfg.briefing
     career = cfg.career
@@ -243,6 +248,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="briefing:{day}",
             slot="morning",
             enabled_path="briefing.enabled",
+            bot="gaia",
         ),
         Automation(
             id="briefing:noon",
@@ -255,6 +261,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="briefing:{day}",
             slot="noon",
             enabled_path="briefing.enabled",
+            bot="gaia",
         ),
         Automation(
             id="briefing:evening",
@@ -267,6 +274,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="briefing:{day}",
             slot="evening",
             enabled_path="briefing.evening_enabled",
+            bot="gaia",
         ),
         Automation(
             id="market:watchlist",
@@ -275,9 +283,13 @@ def describe(cfg: Config) -> list[Automation]:
             days=tuple(briefing.market_days),
             at=briefing.market_at,
             until=briefing.market_until,
-            delivery="telegram",
+            # O painel e a entrega principal; o Telegram, quando ligado, recebe
+            # o mesmo texto (design §4.5a).
+            delivery="local",
             claim_prefix="briefing:market:{day}",
             enabled_path="briefing.market_enabled",
+            # A carteira e da Ariana e e deterministica (sem modelo).
+            bot="ariana",
         ),
         Automation(
             id="career:weekly",
@@ -289,6 +301,8 @@ def describe(cfg: Config) -> list[Automation]:
             delivery="telegram",
             claim_prefix="career:{day}",
             enabled_path="career.enabled",
+            # CV e vagas sao da Sabrina; a rotina continua sem modelo.
+            bot="sabrina",
         ),
         Automation(
             id="memory:daily",
@@ -301,6 +315,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="memory:{day}",
             done_prefix="memory_consolidated:{day}",
             enabled_path="memory.enabled",
+            bot="gaia",
         ),
         Automation(
             id="memory:dream",
@@ -314,6 +329,7 @@ def describe(cfg: Config) -> list[Automation]:
             done_prefix="memory_dreamed:{day}",
             enabled_path="memory.dream_enabled",
             opportunistic=True,
+            bot="gaia",
         ),
     ]
     return itens
@@ -339,6 +355,7 @@ def _row_payload(item: Automation) -> dict[str, Any]:
         "retry_max": item.retry_max,
         "retry_backoff_minutes": item.retry_backoff_minutes,
         "last_result": item.last_result,
+        "bot": item.bot,
     }
 
 
@@ -432,6 +449,7 @@ def load(cfg: Config, store: MemoryStore | None = None) -> list[Automation]:
                     last_result=str(linha.get("last_result") or ""),
                     updated_at=str(linha.get("updated_at") or ""),
                     params=_parse_params(linha.get("params")),
+                    bot=str(linha.get("bot") or "gaia"),
                 )
             )
             continue
@@ -457,6 +475,7 @@ def load(cfg: Config, store: MemoryStore | None = None) -> list[Automation]:
                 last_result=str(linha.get("last_result") or ""),
                 updated_at=str(linha.get("updated_at") or ""),
                 params=_parse_params(linha.get("params")),
+                bot=str(linha.get("bot") or base.bot or "gaia"),
             )
         )
     # Automacoes do registry que ainda nao foram semeadas continuam valendo:
@@ -630,6 +649,8 @@ def render(
         "until": item.until,
         "delivery": item.delivery,
         "enabled": _enabled(cfg, item),
+        # Bot dono (o painel agrupa e o rail mostra a atividade dele).
+        "bot": item.bot or "gaia",
         # Duas coisas diferentes, e a tela precisa das duas: `paused` e a
         # decisao da pessoa (tabela, o checkbox que ela acabou de clicar) e
         # `enabled` e o resultado final (pausada OU skill desligada no config).
