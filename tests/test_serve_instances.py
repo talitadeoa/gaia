@@ -25,7 +25,7 @@ from gaia.serve.server import ServeServer
 
 class FakeTarget:
     def __init__(self) -> None:
-        self.modo = "assistente"
+        self.modo = "gaia"
         self.abriu: list[int] = []
         self.novas = 0
 
@@ -64,20 +64,35 @@ class FakeTarget:
 
     # rotas novas -------------------------------------------------------
     def modes(self) -> list[dict[str, Any]]:
-        return [
-            {"key": "assistente", "name": "Assistente", "summary": "rotina",
-             "current": self.modo == "assistente"},
-            {"key": "pesquisadora", "name": "Pesquisadora", "summary": "pesquisa",
-             "current": self.modo == "pesquisadora"},
-        ]
+        """Alvo antigo: so `/modes`; `/bots` cai neste mesmo metodo."""
+        from gaia.bots import BotIndisponivel, get_bot
+
+        atual = self.modo
+        itens = []
+        for bot in (get_bot("gaia"), get_bot("donna")):
+            assert bot is not None
+            itens.append(
+                {
+                    "key": bot.id,
+                    "id": bot.id,
+                    "name": bot.name,
+                    "summary": bot.role,
+                    "current": bot.id == atual,
+                    "available": bot.id != "donna",
+                    "reason": "workspace inexistente" if bot.id == "donna" else "",
+                }
+            )
+        assert BotIndisponivel  # a excecao e tratada em outro teste
+        return itens
 
     def select_mode(self, key: str) -> list[str]:
-        from gaia.controller.modes import get_persona
+        from gaia.bots import get_bot
 
-        if get_persona(key) is None:
+        bot = get_bot(key)
+        if bot is None:
             raise ValueError(f"modo desconhecido: {key}")
-        self.modo = key
-        return [f"modo ativo: {key}"]
+        self.modo = bot.id
+        return [f"modo ativo: {bot.name}"]
 
     def open_session(self, conversation_id: int) -> list[str]:
         self.abriu.append(conversation_id)
@@ -344,19 +359,69 @@ def test_engine_exige_credencial(servidor):
     assert _pedir(base, "GET", "/engine", cookie=_cookie_de(do_painel))[0] == 401
 
 
-def test_modes_lista_e_troca(servidor):
+def test_bots_lista_e_troca(servidor):
+    _, alvo, base, _ = servidor
+    status, corpo, _ = _pedir(base, "GET", "/bots", token="tok-chat")
+    assert status == 200
+    assert [b["id"] for b in corpo["bots"]] == ["gaia", "donna"]
+    assert corpo["bots"][0]["current"] is True
+    # Donna aparece indisponivel com motivo -- a tela pode explicar o clique.
+    assert corpo["bots"][1]["available"] is False
+    assert "workspace" in corpo["bots"][1]["reason"]
+
+    status, corpo, _ = _pedir(
+        base, "POST", "/bot/select", token="tok-chat", corpo={"id": "donna"}
+    )
+    assert status == 200
+    assert alvo.modo == "donna"
+    assert corpo["bot"] == "donna"
+    # FakeTarget nao tem `select_bot` (alvo antigo): o transporte cai no
+    # `select_mode`, que responde pelo mesmo registry.
+    assert corpo["messages"] == ["modo ativo: Donna Haraway"]
+    # A resposta traz o que a tela redesenha (bolhas, sessoes e bots).
+    assert corpo["history"] == [{"role": "user", "text": "oi"},
+                                {"role": "assistant", "text": "olá"}]
+    assert isinstance(corpo["sessions"], list)
+    assert corpo["bots"][1]["current"] is True
+
+    # `/modes` continua (compatibilidade) e le a MESMA lista.
+    status, corpo, _ = _pedir(base, "GET", "/modes", token="tok-chat")
+    assert status == 200
+    assert [m["key"] for m in corpo["modes"]] == ["gaia", "donna"]
+    assert corpo["modes"][1]["current"] is True
+
+
+def test_bot_desconhecido_e_400(servidor):
+    _, alvo, base, _ = servidor
+    status, corpo, _ = _pedir(
+        base, "POST", "/bot/select", token="tok-chat", corpo={"id": "inexistente"}
+    )
+    assert status == 400
+    assert corpo["error"] == "bot_failed"
+    assert alvo.modo == "gaia"
+
+
+def test_bot_vazio_e_400(servidor):
+    _, _, base, _ = servidor
+    status, corpo, _ = _pedir(base, "POST", "/bot/select", token="tok-chat", corpo={})
+    assert status == 400
+    assert corpo["error"] == "empty_bot"
+
+
+def test_mode_lista_e_troca(servidor):
+    """`POST /mode` e alias de `/bot/select` (mesmo registry)."""
     _, alvo, base, _ = servidor
     status, corpo, _ = _pedir(base, "GET", "/modes", token="tok-chat")
     assert status == 200
-    assert [m["key"] for m in corpo["modes"]] == ["assistente", "pesquisadora"]
+    assert [m["key"] for m in corpo["modes"]] == ["gaia", "donna"]
     assert corpo["modes"][0]["current"] is True
 
     status, corpo, _ = _pedir(
-        base, "POST", "/mode", token="tok-chat", corpo={"mode": "pesquisadora"}
+        base, "POST", "/mode", token="tok-chat", corpo={"mode": "donna"}
     )
     assert status == 200
-    assert alvo.modo == "pesquisadora"
-    assert corpo["messages"] == ["modo ativo: pesquisadora"]
+    assert alvo.modo == "donna"
+    assert corpo["messages"] == ["modo ativo: Donna Haraway"]
     assert corpo["engine"]["mode"] == "Assistente"  # health fake nao muda
 
 
@@ -367,7 +432,7 @@ def test_mode_desconhecido_e_400(servidor):
     )
     assert status == 400
     assert corpo["error"] == "mode_failed"
-    assert alvo.modo == "assistente"
+    assert alvo.modo == "gaia"
 
 
 def test_mode_vazio_e_400(servidor):

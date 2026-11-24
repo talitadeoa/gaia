@@ -19,6 +19,7 @@ import secrets
 import threading
 from typing import Any
 
+from gaia.bots import BotIndisponivel
 from gaia.config import ECHO_LABELS, ECHO_LANGUAGES
 from gaia.interface.remote import RemoteUI, _plain
 from gaia.serve.voice import (
@@ -84,6 +85,9 @@ class OrchestratorTarget:
             # como função levantava TypeError e deixava /health sem resposta.
             "mode": getattr(self.orch, "mode_name", ""),
             "mode_key": self._mode_key(),
+            # Bot ativo: nasceu com a fase 1 dos bots e o `mode_key` ja E o id
+            # do bot (o campo fica repetido de proposito, para a tela nova).
+            "bot": self._mode_key(),
             "busy": self.ocupado,
             "chinese": self.chinese(),
             "language": self.echo_language(),
@@ -144,41 +148,81 @@ class OrchestratorTarget:
             return []
         return [_plain(hit) for hit in hits]
 
-    # ------------------------------------------------------------------ modos
-    def modes(self) -> list[dict[str, Any]]:
-        """Personas do nucleo (mesma lista do /modo da TUI)."""
-        listar = getattr(self.orch, "modes", None)
+    # ------------------------------------------------------------------ bots
+    def bots(self) -> list[dict[str, Any]]:
+        """Bots do registry (a mesma fonte do `/bot`): id, nome, papel e estado.
+
+        ``available``/``reason`` saem do registry: um bot bem configurado que
+        depende de uma pasta que esta maquina nao tem aparece na lista como
+        indisponivel, com o motivo, em vez de sumir (a tela precisa poder
+        explicar por que o clique nao troca).
+        """
+        listar = getattr(self.orch, "bots_list", None)
         if not callable(listar):
             return []
+        status = getattr(self.orch, "bot_status", None)
         atual = self._mode_key()
+        resultado: list[dict[str, Any]] = []
+        for bot in listar():
+            disponivel, motivo = (
+                status(bot) if callable(status) else (True, "")
+            )
+            resultado.append(
+                {
+                    "id": bot.id,
+                    "name": bot.name,
+                    "role": bot.role,
+                    "workspace": bot.workspace,
+                    "tools": list(bot.tools) if bot.tools is not None else None,
+                    "current": bot.id == atual,
+                    "available": bool(disponivel),
+                    "reason": motivo,
+                }
+            )
+        return resultado
+
+    def modes(self) -> list[dict[str, Any]]:
+        """Alias antigo de `/bots` (`/modes` continua existindo).
+
+        A resposta mantem as chaves historicas (`key`, `name`, `summary`,
+        `current`) para a tela antiga e ganha `id`/`available`/`reason`: as
+        duas rotas leem o mesmo registry, sem duplicar logica.
+        """
         return [
             {
-                "key": persona.key,
-                "name": persona.name,
-                "summary": persona.summary,
-                "current": persona.key == atual,
+                "key": bot["id"],
+                "id": bot["id"],
+                "name": bot["name"],
+                "summary": bot["role"],
+                "current": bot["current"],
+                "available": bot["available"],
+                "reason": bot["reason"],
             }
-            for persona in listar()
+            for bot in self.bots()
         ]
 
-    def select_mode(self, key: str) -> list[str]:
-        """Troca o modo ativo e devolve mensagens do /modo."""
+    def select_bot(self, key: str) -> list[str]:
+        """Troca o bot ativo (conversa + sessao + politica) e devolve mensagens."""
         if self.ocupado:
             raise MotorOcupado("turno em andamento")
         if self._loop is None:
             raise RuntimeError("serve sem loop asyncio ligado")
-        from gaia.controller.modes import get_persona
+        trocar = getattr(self.orch, "select_bot", None)
+        if not callable(trocar):
+            raise RuntimeError("troca de bot indisponivel neste motor")
+        futuro = asyncio.run_coroutine_threadsafe(trocar(key), self._loop)
+        try:
+            bot = futuro.result(timeout=60.0)
+        except BotIndisponivel as exc:
+            # A configuracao esta certa; o ambiente (pasta) e que falta. A
+            # falha do `run_coroutine_threadsafe` re-levanta a excecao original,
+            # entao a distincao sobrevive ate o transporte (409 vs 400).
+            raise BotIndisponivel(str(exc)) from exc
+        return [f"bot ativo: {bot.name} — {bot.role}"]
 
-        persona = get_persona(key)
-        if persona is None:
-            # `resolve_mode` cai no padrao quando nao conhece a chave; aqui isso
-            # seria uma troca silenciosa errada, entao recusamos.
-            raise ValueError(f"modo desconhecido: {key}")
-        futuro = asyncio.run_coroutine_threadsafe(
-            self.orch.select_mode(persona.key), self._loop
-        )
-        futuro.result(timeout=60.0)
-        return [f"modo ativo: {persona.name} — {persona.summary}"]
+    def select_mode(self, key: str) -> list[str]:
+        """Alias antigo de `/bot/select` (mesmo registry, mesma validacao)."""
+        return self.select_bot(key)
 
     # --------------------------------------------------------------- sessoes
     def open_session(self, conversation_id: int) -> list[str]:
