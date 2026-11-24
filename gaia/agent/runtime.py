@@ -68,6 +68,10 @@ class AgentClient:
         self.directory = (directory or cfg.project_directory()).resolve()
         self._provider: Provider | None = None
         self._events: asyncio.Queue[Event] = asyncio.Queue()
+        # Uma fila por sessao para quem precisa de fluxo concorrente (segundo
+        # plano, bots). A fila global continua existindo para o caminho
+        # single-turn (TUI/`ask`), que e o de sempre.
+        self._session_queues: dict[str, list[asyncio.Queue[Event]]] = {}
         self._sessions: dict[str, AgentSession] = {}
         self._store = SessionStore(cfg.resolved_data_dir() / "sessions")
         self._tool_context = ToolContext(
@@ -378,7 +382,9 @@ class AgentClient:
         self._ensure_provider()
         if session.busy:
             raise AgentError("a sessao ja esta executando; aguarde ou interrompa")
-        self._drain_events()
+        # Limpa so a fila desta sessao: a global pode ter eventos de outro
+        # turno em andamento (segundo plano).
+        self._drain_events(session_id)
         session.busy = True
         task = asyncio.create_task(
             self._run_turn(
@@ -428,12 +434,46 @@ class AgentClient:
 
     def _emit(self, event: Event) -> None:
         self._events.put_nowait(event)
+        # Fan-out: cada assinante da sessao recebe a propria copia. Sem isso,
+        # dois turnos simultaneos disputam a fila global e um deles fica mudo.
+        for fila in list(self._session_queues.get(event.session_id, ())):
+            fila.put_nowait(event)
 
-    def _drain_events(self) -> None:
-        """Descarta eventos pendentes de um turno anterior interrompido."""
+    def subscribe_session(self, session_id: str) -> asyncio.Queue[Event]:
+        """Fila so desta sessao. Quem assina precisa desassinar no `finally`."""
+        fila: asyncio.Queue[Event] = asyncio.Queue()
+        self._session_queues.setdefault(session_id, []).append(fila)
+        return fila
+
+    def unsubscribe_session(
+        self, session_id: str, fila: asyncio.Queue[Event]
+    ) -> None:
+        filas = self._session_queues.get(session_id)
+        if not filas:
+            return
+        if fila in filas:
+            filas.remove(fila)
+        if not filas:
+            self._session_queues.pop(session_id, None)
+
+    def _drain_events(self, session_id: str = "") -> None:
+        """Descarta eventos pendentes de um turno anterior interrompido.
+
+        Com ``session_id`` limpa so as filas daquela sessao. A fila global so e
+        limpa quando o chamador nao pede sessao: limpar a global num turno
+        concorrente apagaria eventos de outro turno.
+        """
+        if session_id:
+            for fila in list(self._session_queues.get(session_id, ())):
+                self._descartar(fila)
+            return
+        self._descartar(self._events)
+
+    @staticmethod
+    def _descartar(fila: asyncio.Queue[Event]) -> None:
         while True:
             try:
-                self._events.get_nowait()
+                fila.get_nowait()
             except asyncio.QueueEmpty:
                 return
 
@@ -925,6 +965,21 @@ class AgentClient:
                 continue
             yield event
 
+    async def stream_session_events(
+        self, session_id: str, stop: asyncio.Event | None = None
+    ) -> AsyncIterator[Event]:
+        """Eventos de uma sessao especifica (assinante proprio, sem disputa)."""
+        fila = self.subscribe_session(session_id)
+        try:
+            while not (stop and stop.is_set()):
+                try:
+                    event = await asyncio.wait_for(fila.get(), timeout=0.5)
+                except TimeoutError:
+                    continue
+                yield event
+        finally:
+            self.unsubscribe_session(session_id, fila)
+
     def _latest_assistant(self, session_id: str) -> AssistantMessage | None:
         session = self._session(session_id)
         if session is None:
@@ -946,6 +1001,7 @@ class AgentClient:
 
     # ------------------------------------------------------------------- fim
     async def aclose(self) -> None:
+        self._session_queues.clear()
         for session in list(self._sessions.values()):
             if session.task is not None and not session.task.done():
                 session.cancel.set()

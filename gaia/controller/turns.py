@@ -352,10 +352,12 @@ class TurnMixin(OrchestratorContract):
         stop = asyncio.Event()
 
         async def pump() -> None:
+            # Fila da sessao: dois turnos simultaneos (bot + segundo plano) nao
+            # disputam evento nenhum, e o filtro por session_id deixa de ser
+            # necessario (a fila ja e da sessao).
             try:
-                async for event in self.client.stream_events(stop=stop):
-                    if getattr(event, "session_id", "") == sid:
-                        await queue.put(event)
+                async for event in self.client.stream_session_events(sid, stop=stop):
+                    await queue.put(event)
             except asyncio.CancelledError:
                 return
             except Exception as exc:  # pragma: no cover

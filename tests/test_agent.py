@@ -490,3 +490,94 @@ def test_agent_tool_set_completo():
 def test_reasoning_delta_tipo_existe():
     delta = ReasoningDelta("pensando")
     assert delta.text == "pensando"
+
+
+# ------------------------------------------------- eventos e politica por sessao
+async def _consumir_turno(fila, timeout: float = 3.0) -> str:
+    """Le a fila da sessao ate o turno terminar e devolve o texto emitido."""
+    from gaia.agent.events import TextDelta as EventTextDelta
+    from gaia.agent.events import TurnCompleted, TurnFailed
+
+    partes: list[str] = []
+    while True:
+        evento = await asyncio.wait_for(fila.get(), timeout=timeout)
+        if isinstance(evento, EventTextDelta):
+            partes.append(evento.text)
+        elif isinstance(evento, (TurnCompleted, TurnFailed)):
+            return "".join(partes)
+
+
+async def test_dois_turnos_simultaneos_nao_roubam_eventos(tmp_path, isolated_env):
+    """Duas sessoes rodando ao mesmo tempo recebem exatamente os seus eventos.
+
+    Antes do fan-out por sessao, ``prompt_async`` zerava a fila global: o
+    segundo turno engolia os eventos do primeiro, que ficava mudo ate o
+    stall_timeout, sem nenhum erro visivel.
+    """
+    client = _client(tmp_path, isolated_env)
+    (tmp_path / "proj").mkdir()
+    provider = ScriptedProvider(
+        [
+            [TextDelta("primeira"), Finish("stop")],
+            [TextDelta("segunda"), Finish("stop")],
+        ]
+    )
+    client._provider = provider
+    sess_a = await client.create_session("a")
+    sess_b = await client.create_session("b")
+    fila_a = client.subscribe_session(sess_a.id)
+    fila_b = client.subscribe_session(sess_b.id)
+    try:
+        await client.prompt_async(sess_a.id, "um")
+        await client.prompt_async(sess_b.id, "dois")
+
+        assert await _consumir_turno(fila_a) == "primeira"
+        assert await _consumir_turno(fila_b) == "segunda"
+    finally:
+        client.unsubscribe_session(sess_a.id, fila_a)
+        client.unsubscribe_session(sess_b.id, fila_b)
+        await client.aclose()
+
+
+async def test_turno_em_andamento_nao_perde_evento_quando_outro_comeca(
+    tmp_path, isolated_env
+):
+    """O caso real do bug: A ja esta transmitindo quando B comeca.
+
+    ``prompt_async`` descarregava a fila global logo no inicio, entao os
+    eventos que A ja tinha emitido (e que ninguem leu ainda) sumiam quando B
+    entrava. Aqui A so responde depois que B ja comecou.
+    """
+    client = _client(tmp_path, isolated_env)
+    (tmp_path / "proj").mkdir()
+    liberar_a = asyncio.Event()
+
+    class GateProvider(ScriptedProvider):
+        async def stream(self, request):  # type: ignore[override]
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                await liberar_a.wait()
+                yield TextDelta("A terminou")
+            else:
+                yield TextDelta("B terminou")
+            yield Finish("stop")
+
+    provider = GateProvider([])
+    client._provider = provider
+    sess_a = await client.create_session("a")
+    sess_b = await client.create_session("b")
+    fila_a = client.subscribe_session(sess_a.id)
+    fila_b = client.subscribe_session(sess_b.id)
+    try:
+        await client.prompt_async(sess_a.id, "um")
+        consumidor_a = asyncio.create_task(_consumir_turno(fila_a))
+        await asyncio.sleep(0.05)  # A ja comecou (TurnStarted emitido)
+        await client.prompt_async(sess_b.id, "dois")
+        assert await _consumir_turno(fila_b) == "B terminou"
+
+        liberar_a.set()
+        assert await asyncio.wait_for(consumidor_a, timeout=3) == "A terminou"
+    finally:
+        client.unsubscribe_session(sess_a.id, fila_a)
+        client.unsubscribe_session(sess_b.id, fila_b)
+        await client.aclose()
