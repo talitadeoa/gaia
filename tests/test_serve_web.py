@@ -193,7 +193,9 @@ def test_card_de_backlog_expande_ao_clicar():
     assert 'class: "topo abrir"' in texto and 'onclick: () => irParaTela("#backlog")' in texto
     # Cada projeto e um collapsible de verdade (`details`/`summary`).
     assert 'window.Gaia.el("details", { class: "projeto"' in texto
-    assert "window.Gaia.el(\"summary\", { title:" in texto
+    assert 'window.Gaia.el("summary", {' in texto and 'class: chaveGrupo' not in texto
+    # Projeto sem repo avisa na propria linha (o despacho recusa).
+    assert 'class: "repo falta"' in texto and '"sem repositório"' in texto
     # O estado do collapsible do usuario sobrevive ao redesenho do SSE.
     assert "estado.backlogGrupos" in texto and '"toggle"' in texto
     # O resumo nao repete singular/plural entre parenteses.
@@ -209,6 +211,24 @@ def test_card_de_backlog_expande_ao_clicar():
         assert rotulo in texto
     # Limpeza de 7 dias visivel na tela (o servidor e que filtra).
     assert "prune_days" in texto
+
+
+def test_backlog_pede_o_repo_no_ponto_de_adicionar():
+    """Pagina nova sem mapeamento: o campo de repo aparece onde a pessoa esta.
+
+    O problema: ``x backlog`` sem ``[backlog.repos]`` aparecia no card e o item
+    nunca despachava. Agora o grupo diz "sem repositório" e o formulario de
+    item novo ganha o campo que grava no TOML (``POST /backlog/repo``).
+    """
+    texto, _ = _html()
+    assert 'api("/backlog/repo"' in texto
+    assert 'id: "backlog-repo-" + local' in texto
+    assert 'placeholder: "dono/repo deste projeto"' in texto
+    assert '"salvar repositório"' in texto
+    assert "needs_repo" in texto
+    # O rascunho guarda o repo por pele (o redesenho do SSE nao apaga).
+    assert 'card: { texto: "", projeto: "", repo: "" }' in texto
+    assert 'agenda: { texto: "", projeto: "", repo: "" }' in texto
 
 
 def test_js_das_duas_telas_tem_sintaxe_valida(tmp_path):

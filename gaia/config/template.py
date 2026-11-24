@@ -166,10 +166,13 @@ extra_args = []
 # Card "Backlog" do web: paginas da Agenda cujo titulo termina em "backlog"
 # + itens adicionados pelo chat. Cada item e despachado ao pi num clone do
 # repositorio e termina em PR.
+# A PAGINA E A FONTE: apagar a pagina na Agenda apaga o grupo aqui; renomear
+# ("gaia backlog" -> "gaia2 backlog") move os itens, sem perder PR nem id.
 enabled = true
 agenda_suffix = "backlog"
-agenda_scan = 50            # quantas paginas recentes varrer atras do sufixo
-github_owner = "talitadeoa"     # dono usado quando nao ha mapeamento abaixo
+agenda_scan = 200           # quantas paginas recentes varrer atras do sufixo
+remove_orphans = true           # grupo sem pagina na Agenda sai do backlog
+github_owner = "talitadeoa"     # dono usado quando o mapa abaixo so tem o repo
 workspace = "~/pr-workspace"    # clones do backlog (uma pasta por repo)
 base_branch = "main"
 branch_prefix = "gaia/backlog"
@@ -180,6 +183,8 @@ max_prompt_chars = 12000
 
 # Projeto (prefixo do titulo da pagina) -> repositorio do GitHub.
 # "gaia backlog" -> gaia, "agenda backlog" -> agenda, "suite backlog" -> suite.
+# Projeto sem linha aqui NAO despacha: o card pede o repositorio (e grava
+# neste bloco). Nunca ha chute de "dono/nome-do-projeto".
 [backlog.repos]
 gaia = "talitadeoa/gaia"
 agenda = "talitadeoa/agenda"

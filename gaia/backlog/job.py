@@ -136,9 +136,13 @@ class BacklogJob:
 
     # ------------------------------------------------------------------ repo
     def repo_of(self, item: dict[str, Any]) -> str:
+        """``owner/repo`` do projeto, ou ``""`` (nunca chuta dono/Projeto).
+
+        Projeto sem mapeamento em ``[backlog.repos]`` nao despacha: ``execute``
+        recusa antes de tocar em git/gh/pi, com o motivo no card.
+        """
         projeto = str(item.get("project") or "").strip()
-        mapeado = self.cfg.repo_for(projeto) if projeto else ""
-        return mapeado or f"{self.cfg.github_owner}/{slugify(projeto or 'backlog')}"
+        return self.cfg.repo_for(projeto) if projeto else ""
 
     def destination(self, item: dict[str, Any]) -> Path:
         return clone_dir(self.workspace, self.repo_of(item))
@@ -336,6 +340,12 @@ class BacklogJob:
         try:
             if not item.get("title"):
                 raise BacklogJobError("item sem titulo")
+            if not repo:
+                raise BacklogJobError(
+                    f"projeto '{item.get('project') or 'chat'}' sem repositorio: "
+                    "defina em [backlog.repos] do config.toml (o card do backlog "
+                    "pede o repo do projeto)"
+                )
             if shutil.which(self.cfg.gh_binary) is None:
                 raise BacklogJobError(
                     f"`{self.cfg.gh_binary}` nao encontrado: o backlog precisa do "

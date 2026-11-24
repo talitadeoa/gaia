@@ -17,6 +17,7 @@ esta ligado no mesmo processo.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from gaia.agenda.client import AgendaError
@@ -41,6 +42,7 @@ class BacklogMixin(OrchestratorContract):
             self.store,
             agenda=self.agenda,
             kick=(worker.kick if worker is not None else None),
+            on_set_repo=self._backlog_gravar_repo,
         )
         return fachada
 
@@ -159,12 +161,45 @@ class BacklogMixin(OrchestratorContract):
     def backlog_remove(self, item_id: int) -> bool:
         return self.backlog_service_facade().remove(int(item_id))
 
+    def _backlog_gravar_repo(self, project: str, repo: str) -> dict[str, Any]:
+        """Grava o par em ``[backlog.repos]`` do TOML, com backup e conferencia.
+
+        O ``ControlCenter`` ja tem a maquinaria (`settings.update`: backup,
+        releitura, rollback). Se nao houver config para editar (teste/motor sem
+        TOML), o repo fica **so** no processo e o retorno diz isso -- nunca
+        fingir que persistiu.
+        """
+        from gaia.control import settings as settings_mod
+
+        novo = dict(self.cfg.backlog.repos)
+        novo[project] = repo
+        caminho = Path(self.cfg.config_file or "").expanduser()
+        if not str(self.cfg.config_file or "").strip():
+            self.cfg.backlog.repos[project] = repo
+            return {"saved": False, "path": "", "backup": ""}
+        resultado = settings_mod.update(
+            caminho, "backlog", "repos", novo, cfg=self.cfg
+        )
+        self.cfg.backlog.repos[project] = repo
+        self._backlog_change({"type": "backlog_repo", "project": project, "repo": repo})
+        return {"saved": True, **resultado}
+
+    def backlog_set_repo(self, project: str, repo: str) -> dict[str, Any]:
+        """Projeto sem repositorio: salva o mapa e destrava o despacho."""
+        try:
+            return self.backlog_service_facade().set_repo(project, repo)
+        except ValueError:
+            raise
+        except RuntimeError as exc:
+            raise AgendaError(str(exc)) from exc
+
     # ------------------------------------------------------------------ comando
     async def _handle_backlog(self, argument: str) -> None:
         """Comando ``/backlog`` (terminal, Telegram e chat do web).
 
         Subcomandos: vazio = lista; ``sync`` = consulta a Agenda;
         ``add [projeto:] texto`` = item do chat; ``run <id>`` = despacha;
+        ``repo <projeto> <dono/repo>`` = grava o repositorio no TOML;
         ``remover <id>`` = apaga o item.
         """
         partes = argument.strip().split(maxsplit=1)
@@ -217,6 +252,27 @@ class BacklogMixin(OrchestratorContract):
                 self.ui.warning("uso: /backlog remover <id>")
                 return
             self.ui.info("removido" if removido else "item nao encontrado")
+            return
+        if sub in {"repo", "repositorio", "repositório"}:
+            partes_repo = resto.split(maxsplit=1)
+            if len(partes_repo) < 2:
+                self.ui.warning("uso: /backlog repo <projeto> <dono/repo>")
+                return
+            try:
+                salvo = self.backlog_set_repo(partes_repo[0], partes_repo[1])
+            except (ValueError, RuntimeError, AgendaError) as exc:
+                self.ui.error(str(exc))
+                return
+            if salvo.get("saved"):
+                self.ui.success(
+                    f"backlog: {salvo['project']} = {salvo['repo']} "
+                    f"(gravado em {salvo.get('path') or 'config.toml'})"
+                )
+            else:
+                self.ui.warning(
+                    f"backlog: {salvo['project']} = {salvo['repo']} "
+                    "(sem config.toml gravavel: vale so neste processo)"
+                )
             return
         snapshot = self.backlog_snapshot()
         grupos = snapshot.get("groups") or []

@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from gaia.agenda.client import AgendaError
 from gaia.backlog.extract import items_from_content, lines_from_html, normalize_item
 from gaia.backlog.facade import BacklogFacade, project_from_title
 from gaia.backlog.job import (
@@ -132,6 +133,21 @@ def test_schema_v8_tem_a_tabela_do_backlog(store):
         "pr_url",
         "finished_at",
     } <= colunas
+
+
+def test_schema_v10_indexa_por_projeto(store):
+    """A identidade do item e (project, fingerprint); o indice acompanha."""
+    assert store.schema_version() >= 10
+    indices = {
+        row["name"]
+        for row in store._conn.execute("PRAGMA index_list(backlog_items)").fetchall()
+    }
+    assert "idx_backlog_page" in indices
+    colunas = [
+        row["name"]
+        for row in store._conn.execute("PRAGMA index_info(idx_backlog_page)").fetchall()
+    ]
+    assert colunas == ["source", "project", "fingerprint"]
 
 
 def test_sync_grava_itens_e_nao_duplica(service):
@@ -333,8 +349,23 @@ def test_repo_mapeado_por_projeto(cfg, tmp_path):
     assert job.repo_of({"project": "gaia"}) == "talitadeoa/gaia"
     assert job.repo_of({"project": "Agenda"}) == "talitadeoa/agenda"
     assert job.repo_of({"project": "suite"}) == "talitadeoa/abin-suite"
-    # Projeto desconhecido cai no owner + nome do projeto.
-    assert job.repo_of({"project": "estudos"}) == "talitadeoa/estudos"
+    # Projeto sem mapeamento NAO chuta owner/<projeto>: o despacho recusa.
+    assert job.repo_of({"project": "estudos"}) == ""
+    assert job.repo_of({"project": ""}) == ""
+
+
+def test_execute_sem_repo_recusa_antes_de_gh_e_pi(cfg, tmp_path):
+    fake = FakeCommand()
+    job = _job(tmp_path, cfg, fake)
+    rodou: list[str] = []
+    job._pi = type(  # type: ignore[assignment]
+        "Pi", (), {"run": staticmethod(lambda *a, **k: rodou.append("pi"))}
+    )()
+    resultado = job.execute({"id": 1, "title": "x", "project": "estudos"})
+    assert resultado.ok is False
+    assert "sem repositorio" in (resultado.error or "")
+    assert "[backlog.repos]" in (resultado.error or "")
+    assert rodou == [] and fake.chamadas == []
 
 
 def test_execute_caminho_feliz_clone_branch_pi_commit_push_pr(cfg, tmp_path):
@@ -581,6 +612,158 @@ def test_fachada_sync_sem_agenda_explica(store, cfg):
         fachada.sync()
 
 
+# ------------------------------------------- espelho da Agenda (purga/move) ---
+
+
+def _pagina(page_id: str, titulo: str, *linhas: str) -> dict[str, Any]:
+    return {
+        "id": page_id,
+        "title": titulo,
+        "content": "".join(f"<div>{linha}</div>" for linha in linhas),
+    }
+
+
+@pytest.mark.asyncio
+async def test_pagina_apagada_na_agenda_apaga_o_grupo(store, cfg):
+    """O caso do 'zaya': pagina que nao existe mais nao fica pendente no card."""
+    agenda = FakeAgenda(
+        [
+            _pagina("p1", "gaia backlog", "um", "dois"),
+            _pagina("p2", "zaya backlog", "velho"),
+        ]
+    )
+    fachada = BacklogFacade(cfg.backlog, store, agenda=agenda)  # type: ignore[arg-type]
+    await fachada.sync_async()  # primeira leitura: so observa
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia", "zaya"}
+
+    agenda.paginas = [_pagina("p1", "gaia backlog", "um", "dois")]
+    resultado = await fachada.sync_async()
+    assert resultado["purged"] == 1
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia"}
+    assert store._conn.execute(
+        "SELECT COUNT(*) AS n FROM backlog_items WHERE project = 'zaya'"
+    ).fetchone()["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_primeira_sync_nao_apaga_banco_legado(store, cfg):
+    """Sem nunca ter lido a Agenda, apagar seria perder trabalho."""
+    antigo = BacklogService(store)
+    antigo.sync_page(
+        page_id="velho", project="zaya", title="zaya backlog", items=[("pendente", False)]
+    )
+    agenda = FakeAgenda([_pagina("p1", "gaia backlog", "um")])
+    fachada = BacklogFacade(cfg.backlog, store, agenda=agenda)  # type: ignore[arg-type]
+    resultado = await fachada.sync_async()
+    assert resultado["purged"] == 0
+    # O grupo legado fica nesta rodada; a seguinte, com a Agenda ja lida, purga.
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia", "zaya"}
+    resultado = await fachada.sync_async()
+    assert resultado["purged"] == 1
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia"}
+
+
+@pytest.mark.asyncio
+async def test_pagina_renomeada_move_os_itens_sem_duplicar(store, cfg):
+    agenda = FakeAgenda([_pagina("p1", "gaia backlog", "um", "dois")])
+    fachada = BacklogFacade(cfg.backlog, store, agenda=agenda)  # type: ignore[arg-type]
+    await fachada.sync_async()
+    await fachada.sync_async()  # marca agenda_seen_at
+    antes = {i["title"]: i["id"] for i in fachada.snapshot()["items"]}
+    # Renomear no Supabase mantem o id da pagina e muda o titulo.
+    agenda.paginas = [_pagina("p1", "gaia2 backlog", "um", "dois")]
+    resultado = await fachada.sync_async()
+    assert resultado["moved"] == 1
+    assert resultado["purged"] == 0
+    depois = {i["title"]: i["id"] for i in fachada.snapshot()["items"]}
+    assert depois == antes  # mesmo id, mesmo texto, grupo novo
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia2"}
+
+
+@pytest.mark.asyncio
+async def test_pagina_renomeada_sem_page_id_casa_pelo_texto(store, cfg):
+    agenda = FakeAgenda([_pagina("p1", "gaia backlog", "um", "dois")])
+    fachada = BacklogFacade(cfg.backlog, store, agenda=agenda)  # type: ignore[arg-type]
+    await fachada.sync_async()
+    await fachada.sync_async()
+    # Pagina recriada na Agenda (id novo) com o mesmo conteudo.
+    agenda.paginas = [_pagina("p9", "gaia3 backlog", "um", "dois")]
+    resultado = await fachada.sync_async()
+    assert resultado["moved"] == 1
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia3"}
+
+
+@pytest.mark.asyncio
+async def test_agenda_fora_do_ar_nao_apaga_nada(store, cfg):
+    class Quebrada(FakeAgenda):
+        async def pages(self, limit: int = 20):
+            raise AgendaError("supabase 500")
+
+    agenda = FakeAgenda([_pagina("p1", "gaia backlog", "um")])
+    fachada = BacklogFacade(cfg.backlog, store, agenda=agenda)  # type: ignore[arg-type]
+    await fachada.sync_async()
+    await fachada.sync_async()
+    fachada.agenda = Quebrada([])  # type: ignore[assignment]
+    with pytest.raises(AgendaError):
+        await fachada.sync_async()
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia"}
+
+
+@pytest.mark.asyncio
+async def test_remove_orphans_desligado_so_grava(store, cfg):
+    cfg.backlog.remove_orphans = False
+    agenda = FakeAgenda([_pagina("p1", "gaia backlog", "um")])
+    fachada = BacklogFacade(cfg.backlog, store, agenda=agenda)  # type: ignore[arg-type]
+    await fachada.sync_async()
+    agenda.paginas = []
+    resultado = await fachada.sync_async()
+    assert resultado["purged"] == 0
+    assert {g["project"] for g in fachada.snapshot()["groups"]} == {"gaia"}
+
+
+@pytest.mark.asyncio
+async def test_projeto_sem_repo_aparece_com_needs_repo(store, cfg):
+    agenda = FakeAgenda([_pagina("p1", "youtube backlog", "editar video")])
+    fachada = BacklogFacade(cfg.backlog, store, agenda=agenda)  # type: ignore[arg-type]
+    await fachada.sync_async()
+    grupo = fachada.snapshot()["groups"][0]
+    assert grupo["project"] == "youtube"
+    assert grupo["repo"] == "" and grupo["needs_repo"] is True
+
+
+def test_set_repo_valida_e_persiste_pelo_gancho(store, cfg):
+    gravados: list[tuple[str, str]] = []
+    fachada = BacklogFacade(
+        cfg.backlog,
+        store,
+        on_set_repo=lambda projeto, repo: gravados.append((projeto, repo))
+        or {"saved": True, "path": "config.toml"},
+    )
+    salvo = fachada.set_repo("youtube", "https://github.com/talitadeoa/youtube.git")
+    assert gravados == [("youtube", "talitadeoa/youtube")]
+    assert salvo["repo"] == "talitadeoa/youtube"
+    assert cfg.backlog.repo_for("youtube") == "talitadeoa/youtube"
+    with pytest.raises(ValueError, match="invalido"):
+        fachada.set_repo("youtube", "sem barra")
+    with pytest.raises(ValueError, match="vazio"):
+        fachada.set_repo("", "talitadeoa/gaia")
+
+
+def test_set_repo_sem_config_gravavel_nao_finge(store, cfg):
+    fachada = BacklogFacade(
+        cfg.backlog,
+        store,
+        on_set_repo=lambda projeto, repo: {"saved": False, "path": ""},
+    )
+    assert fachada.set_repo("youtube", "talitadeoa/youtube")["saved"] is False
+
+
+def test_set_repo_sem_gancho_recusa(store, cfg):
+    fachada = BacklogFacade(cfg.backlog, store)
+    with pytest.raises(RuntimeError, match="config gravavel"):
+        fachada.set_repo("youtube", "talitadeoa/youtube")
+
+
 def test_fachada_add_e_run_chamam_o_worker(store, cfg):
     chamadas: list[int] = []
     fachada = BacklogFacade(cfg.backlog, store, kick=lambda: chamadas.append(1))
@@ -658,6 +841,13 @@ def test_rotas_do_backlog_no_servidor(tmp_path, isolated_env):
                 raise KeyError(item_id)
             return {"id": item_id, "status": "queued", "status_label": "Enviado ao Mini PC"}
 
+        def backlog_set_repo(self, project, repo):
+            self.pedidos.append(("repo", (project, repo)))
+            if project == "youtube" and repo == "sem-barra":
+                raise ValueError("repositorio invalido: 'sem-barra' (esperado dono/repo)")
+            return {"saved": True, "project": project, "repo": repo,
+                    "path": "config.toml", "backup": "config.toml.bak"}
+
     alvo = Target()
     servidor = ServeServer(alvo, RemoteUI(), host="127.0.0.1", port=0)  # type: ignore[arg-type]
     base = servidor.start()
@@ -698,5 +888,18 @@ def test_rotas_do_backlog_no_servidor(tmp_path, isolated_env):
 
         status, corpo = pedir("POST", "/backlog/run", {})
         assert status == 400 and corpo["error"] == "missing_id"
+
+        status, corpo = pedir("POST", "/backlog/repo", {"project": "youtube", "repo": "talitadeoa/youtube"})
+        assert status == 200 and corpo["repo"] == "talitadeoa/youtube"
+        assert ("repo", ("youtube", "talitadeoa/youtube")) in alvo.pedidos
+
+        status, corpo = pedir("POST", "/backlog/repo", {"repo": "talitadeoa/youtube"})
+        assert status == 400 and corpo["error"] == "missing_project"
+
+        status, corpo = pedir("POST", "/backlog/repo", {"project": "youtube"})
+        assert status == 400 and corpo["error"] == "missing_repo"
+
+        status, corpo = pedir("POST", "/backlog/repo", {"project": "youtube", "repo": "sem-barra"})
+        assert status == 400 and corpo["error"] == "bad_repo"
     finally:
         servidor.shutdown()

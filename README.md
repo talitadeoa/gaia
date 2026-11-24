@@ -158,6 +158,7 @@ gaia --remote http://gaia:8787 ask "resuma o dia"
   `/events` (SSE); `POST /session`, `/turn`, `/permission/{id}`, `/abort`,
   `/model`, `/mode`, `/language`, `/chinese`, `/automations/set`, `/automations/run`,
   `/proactive`, `/backlog/sync`, `/backlog/add`, `/backlog/run`,
+  `/backlog/repo`,
   `/voice/listen`, `/voice/speak`, `/voice/stop`,
   `/session/open`, `/session/new`; `DELETE /session`.
 - Escutar fora do loopback **exige** `GAIA_SERVE_TOKEN`; a guarda recusa subir
@@ -226,9 +227,24 @@ gaia --remote http://gaia:8787 ask "resuma o dia"
   `concluído`, ou `erro` com o motivo) e o botão **executar** (`POST
   /backlog/run`), que enfileira o item na fila do mini: o pi implementa no clone,
   a Gaia faz commit/push e abre o PR com `gh`, e o card é avisado pelo evento
-  SSE `backlog`. `POST /backlog/sync` relê as páginas da Agenda (`atualizar`).
-  Itens concluídos somem do card depois de `[backlog] prune_days` dias (7) —
-  some da visualização, nada é apagado do banco.
+  SSE `backlog`.
+
+  **A página é a fonte.** `atualizar` (`POST /backlog/sync`) relê a Agenda e, na
+  mesma passada, (1) grava os itens, (2) **move** o grupo cuja página só mudou
+  de nome (mesmo `page_id` ou ≥80% dos textos iguais — o PR aberto continua
+  ligado ao item) e (3) **apaga** o grupo cuja página saiu da Agenda
+  (`[backlog] remove_orphans`). Nada é apagado se a Agenda falhar, e a primeira
+  sincronização de todas apenas grava (`backlog.agenda_seen_at`), para não
+  limpar banco legado sem nunca ter lido a fonte. Item de chat não morre com a
+  página.
+
+  **Projeto sem repositório não despacha.** Não existe chute de
+  `owner/<projeto>`: o grupo aparece com `sem repositório` e o formulário de item
+  novo ganha o campo `dono/repo`, que grava em `[backlog.repos]` do
+  `config.toml` (backup + releitura) por `POST /backlog/repo` — o mesmo caminho
+  do `/backlog repo <projeto> <dono/repo>`. Itens concluídos somem do card
+  depois de `[backlog] prune_days` dias (7) — some da visualização, nada é
+  apagado do banco.
 - **Sessão de cookie em vez de token a cada visita.** `POST /session` troca o
   `Authorization: Bearer` por um nonce em cookie `HttpOnly` (`gaia_chat`,
   `Path=/`, `SameSite=Strict`); o `Bearer` continua valendo para `gaia
@@ -692,7 +708,7 @@ gaia browser screenshot https://exemplo.com captura.png
 | `/preferencia <texto>` · `/preferencias` | ensina · mostra preferências |
 | `/confirmar` · `/autoaprovar` | confirmação de notas · ferramentas |
 | `/chines on\|off\|en\|fr` · `/reiniciar` · `/sair` | eco de tradução (chinês, inglês ou francês) · reinicia · encerra |
-| `/backlog [sync\|add\|run\|remover]` | lista · relê as páginas da Agenda · adiciona item · despacha ao pi · apaga |
+| `/backlog [sync\|add\|run\|repo\|remover]` | lista · relê as páginas da Agenda (grava, move e apaga órfão) · adiciona item · despacha ao pi · define o repositório do projeto · apaga |
 
 `/ajuda` lista tudo com a descrição de cada um.
 

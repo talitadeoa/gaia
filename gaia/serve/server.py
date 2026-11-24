@@ -507,6 +507,11 @@ class _Handler(BaseHTTPRequestHandler):
             # Botao "Executar": enfileira o item; o worker executa e avisa.
             self._backlog_run(corpo)
             return
+        if rota == "/backlog/repo":
+            # Projeto sem repositorio: salva o mapa no TOML e destrava o
+            # despacho. Escrita em config passa pelo ControlCenter (backup).
+            self._backlog_repo(corpo)
+            return
         if rota == "/automations/set":
             # Checkbox da tela de automacoes: {id, enabled}. Separada de
             # /automations (GET) para nao misturar leitura e escrita na mesma
@@ -876,6 +881,43 @@ class _Handler(BaseHTTPRequestHandler):
             self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "backlog_failed", str(exc))
             return
         self._json(HTTPStatus.OK, {"ok": True, "item": item})
+
+    def _backlog_repo(self, corpo: dict[str, Any]) -> None:
+        """POST /backlog/repo: grava ``[backlog.repos].<projeto>`` no TOML.
+
+        O card pede o repo do projeto novo (pagina ``x backlog`` sem mapeamento)
+        no proprio formulario de item. Sem a rota, o grupo apareceria e o
+        despacho recusaria para sempre.
+        """
+        funcao = _opcional(self.app.target, "backlog_set_repo")
+        if funcao is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "backlog_unavailable",
+                "backlog indisponivel neste motor",
+            )
+            return
+        projeto = str(corpo.get("project") or "").strip()
+        if not projeto:
+            self._erro(HTTPStatus.BAD_REQUEST, "missing_project", "informe o projeto")
+            return
+        repo = str(corpo.get("repo") or "").strip()
+        if not repo:
+            self._erro(HTTPStatus.BAD_REQUEST, "missing_repo", "informe dono/repo")
+            return
+        try:
+            resultado = funcao(projeto, repo)
+        except ValueError as exc:
+            self._erro(HTTPStatus.BAD_REQUEST, "bad_repo", str(exc))
+            return
+        except RuntimeError as exc:
+            self._erro(HTTPStatus.SERVICE_UNAVAILABLE, "backlog_disabled", str(exc))
+            return
+        except Exception as exc:
+            logger.warning("backlog repo falhou: %s", exc)
+            self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "backlog_failed", str(exc))
+            return
+        self._json(HTTPStatus.OK, {"ok": True, **resultado})
 
     def _backlog_run(self, corpo: dict[str, Any]) -> None:
         """POST /backlog/run: enfileira o item para o mini/pi."""

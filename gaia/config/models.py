@@ -382,9 +382,13 @@ class BacklogConfig(BaseModel):
 
     enabled: bool = True
     # Fonte Agenda: paginas cujo titulo termina com este sufixo (sem caixa).
+    # A PAGINA e a fonte: apagar/renomear na Agenda apaga/move o grupo aqui.
     agenda_suffix: str = "backlog"
-    # Quantas paginas recentes varrer atras do sufixo.
-    agenda_scan: int = 50
+    # Quantas paginas recentes varrer atras do sufixo. A purga usa a mesma
+    # janela: pagina antiga fora dela sumiria por engano, entao ela e larga.
+    agenda_scan: int = 200
+    # Apagar do backlog o grupo cuja pagina nao esta mais na Agenda.
+    remove_orphans: bool = True
     # Projeto da Agenda -> repositorio GitHub (owner/repo).
     repos: dict[str, str] = Field(
         default_factory=lambda: {
@@ -410,7 +414,13 @@ class BacklogConfig(BaseModel):
     max_prompt_chars: int = 12000
 
     def repo_for(self, project: str) -> str:
-        """``owner/repo`` do projeto (ou o do owner, com o nome do projeto)."""
+        """``owner/repo`` do projeto, ou ``""`` quando nao ha mapeamento.
+
+        Nunca chuta ``owner/<projeto>``: abrir PR no repositorio errado (ou
+        num que nao existe) e pior que recusar o item. Projeto sem repo
+        aparece no card como "sem repositorio" e o despacho recusa com o
+        motivo; o mapeamento mora em ``[backlog.repos]`` do TOML.
+        """
         chave = project.strip().lower()
         mapeado = ""
         for nome, repo in self.repos.items():
@@ -421,7 +431,7 @@ class BacklogConfig(BaseModel):
             return mapeado
         if mapeado:  # config parcial: so o nome do repo
             return f"{self.github_owner}/{mapeado}"
-        return f"{self.github_owner}/{project.strip()}"
+        return ""
 
 
 class FocusConfig(BaseModel):

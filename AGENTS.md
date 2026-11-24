@@ -214,6 +214,21 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   de `<details>` sem isso imprime `[object HTMLDetailsElement]`.
   Testes: `tests/test_serve_web.py` (contrato das duas peles) e
   `tests/test_backlog.py` (rotas e o worker).
+- **A Agenda manda no backlog.** `BacklogFacade._gravar_paginas` faz tres
+  fases na ordem: gravar (`sync_page`), reconciliar (`_reconciliar`:
+  renome -> `move_project`) e purgar (`purge_project`). A **identidade do item
+  e `(project, fingerprint)`**, nunca o `page_id` do Supabase — e isso que
+  sobrevive ao rename; o indice `idx_backlog_page` acompanha (schema v10).
+  Guardas: excecao em `agenda.pages()` sobe antes da purga (nada e apagado sem
+  leitura), `[backlog] remove_orphans` desliga a limpeza e o meta
+  `backlog.agenda_seen_at` impede a primeira sync de apagar banco legado.
+  Repo nunca e chutado: `repo_for` devolve `""`, o grupo ganha
+  `needs_repo` e `BacklogJob.execute` recusa antes de git/gh/pi; o campo
+  `dono/repo` do formulario grava `[backlog.repos]` no TOML por
+  `POST /backlog/repo` (`BacklogFacade.set_repo` -> gancho do mixin ->
+  `control/settings.update`, com backup). Qualquer mudanca nessa regra pede
+  teste em `tests/test_backlog.py` (purga, rename, primeira sync, Agenda
+  fora do ar, projeto sem repo).
 - **Voz no web:** duas portas para o mesmo Whisper (`gaia/serve/voice.py`).
   `[serve] voice_source = "browser"` (padrao) faz o *navegador* gravar WAV
   16-bit mono e mandar em `POST /voice/upload` — o mini headless so transcreve;

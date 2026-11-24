@@ -107,8 +107,8 @@ COMMANDS: tuple[Command, ...] = (
         True,
     ),
     Command(
-        "/backlog [sync|add|run|remover]",
-        "card do backlog: sincroniza a Agenda, adiciona e despacha itens ao pi",
+        "/backlog [sync|add|run|repo|remover]",
+        "card do backlog: sincroniza a Agenda, adiciona, define o repositorio e despacha itens ao pi",
         ("/backlog",),
         True,
     ),

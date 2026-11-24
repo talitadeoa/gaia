@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 # Versao atual do schema. Incremente ao adicionar novas migracoes em _migrate.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # v5: conversas separadas por canal (cli, telegram, whatsapp).
 DEFAULT_CHANNEL = "cli"
@@ -172,7 +172,7 @@ class MemoryStore:
                 CREATE INDEX IF NOT EXISTS idx_backlog_status
                     ON backlog_items(status, id);
                 CREATE INDEX IF NOT EXISTS idx_backlog_page
-                    ON backlog_items(source, page_id, fingerprint);
+                    ON backlog_items(source, project, fingerprint);
                 CREATE INDEX IF NOT EXISTS idx_backlog_finished
                     ON backlog_items(status, finished_at);
 
@@ -223,6 +223,16 @@ class MemoryStore:
             self._rename_modes_v3()
         if version < 4:
             self._rename_session_column_v4()
+        if version < 10:
+            # v10: a identidade do item do backlog e (project, fingerprint) -- o
+            # `project` sai do titulo da pagina e sobrevive ao rename no
+            # Supabase. O indice antigo era por `page_id`.
+            with self._conn:
+                self._conn.execute("DROP INDEX IF EXISTS idx_backlog_page")
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_backlog_page "
+                    "ON backlog_items(source, project, fingerprint)"
+                )
         if version < SCHEMA_VERSION:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
 

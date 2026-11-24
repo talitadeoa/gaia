@@ -447,6 +447,10 @@ class OrchestratorContract(ABC):
         ...
 
     @abstractmethod
+    def backlog_set_repo(self, project: str, repo: str) -> dict[str, Any]:
+        ...
+
+    @abstractmethod
     async def _handle_backlog(self, argument: str) -> None:
         ...
 

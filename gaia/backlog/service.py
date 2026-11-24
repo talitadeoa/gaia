@@ -8,10 +8,20 @@ fonte e o estado do despacho:
   o item como concluido (``source_done``) e a tela mostra isso.
 * ``source``: ``agenda`` (pagina sincronizada) ou ``chat`` (adicionado por
   texto/voz). O item de chat nao tem ``page_id``.
+* ``project``: a **chave do grupo** derivada do titulo da pagina
+  (``gaia backlog`` -> ``gaia``). E ela que identifica a origem, nao o
+  ``page_id`` do Supabase: renomear a pagina nao perde o item.
+* ``page_id``: referencia da pagina (atualizada a cada sincronizacao, usada
+  para reconhecer renome e para o prompt do pi).
 * ``fingerprint``: identidade estavel dentro da fonte (texto normalizado), para
   sincronizar duas vezes sem duplicar nem perder o estado do item.
 * ``finished_at``: quando chegou em ``pr``/``done``; a limpeza de 7 dias usa
   essa coluna (e nunca apaga o historico, so esconde da tela).
+
+A pagina e a fonte: ``purge_project`` apaga o grupo cuja pagina sumiu da
+Agenda e ``move_project`` leva os itens quando ela foi renomeada. Os dois sao
+chamados pela fachada **depois** de uma leitura bem-sucedida da Agenda (falha
+de rede nunca apaga nada).
 
 A limpeza e de *visualizacao*: quem consulta o card recebe
 ``completed_before`` e o SQL filtra. Nada e apagado do banco.
@@ -77,6 +87,7 @@ class BacklogService:
         *,
         include_concluded: bool = True,
         page_id: str = "",
+        project: str = "",
         status: str = "",
         limit: int = 500,
     ) -> list[dict[str, Any]]:
@@ -96,6 +107,9 @@ class BacklogService:
         if page_id:
             clausulas.append("page_id = ?")
             valores.append(page_id)
+        if project:
+            clausulas.append("project = ?")
+            valores.append(project)
         if status:
             clausulas.append("status = ?")
             valores.append(status)
@@ -116,13 +130,15 @@ class BacklogService:
         return dict(row) if row else None
 
     def find_by_fingerprint(
-        self, *, source: str, page_id: str, fingerprint: str
+        self, *, source: str, key: str, fingerprint: str, by: str = "project"
     ) -> dict[str, Any] | None:
+        """Item da mesma origem com o mesmo texto (``key`` = project ou page_id)."""
+        coluna = "page_id" if by == "page_id" else "project"
         with self.store._lock, self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM backlog_items WHERE source = ? AND page_id = ? "
+                f"SELECT * FROM backlog_items WHERE source = ? AND {coluna} = ? "
                 "AND fingerprint = ?",
-                (source, page_id, fingerprint),
+                (source, key, fingerprint),
             ).fetchone()
         return dict(row) if row else None
 
@@ -160,7 +176,9 @@ class BacklogService:
         if not limpo:
             raise ValueError("item sem texto")
         marca = fingerprint(limpo)
-        existente = self.find_by_fingerprint(source="chat", page_id="", fingerprint=marca)
+        existente = self.find_by_fingerprint(
+            source="chat", key="", fingerprint=marca, by="page_id"
+        )
         if existente is not None:
             return existente
         momento = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
@@ -190,10 +208,16 @@ class BacklogService:
     ) -> dict[str, int]:
         """Grava os itens da pagina preservando o estado de cada um.
 
+        A identidade do item e ``(project, fingerprint)`` dentro da fonte
+        ``agenda`` -- **nao** o ``page_id``: renomear a pagina na Agenda muda o
+        id, mas o grupo e o texto continuam os mesmos, entao o item mantem
+        status/PR em vez de nascer de novo. O ``page_id`` e gravado como
+        referencia (o prompt do pi cita a pagina).
+
         Itens que ja existem tem o titulo/estado de origem atualizados, mas
         **nunca** voltam de ``pr`` para ``pending``: o despacho e mais forte
-        que a marcacao da pagina. Itens que sumiram da pagina nao sao apagados
-        (a limpeza e so visual e o PR continua rastreavel).
+        que a marcacao da pagina. Item que sumiu da pagina continua aqui: quem
+        decide apagar o grupo e a reconciliacao da fachada (pagina apagada).
         """
         momento = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
         inseridos = 0
@@ -203,8 +227,8 @@ class BacklogService:
                 marca = fingerprint(texto)
                 row = conn.execute(
                     "SELECT id, status, source_done, finished_at FROM backlog_items "
-                    "WHERE source = 'agenda' AND page_id = ? AND fingerprint = ?",
-                    (page_id, marca),
+                    "WHERE source = 'agenda' AND project = ? AND fingerprint = ?",
+                    (project, marca),
                 ).fetchone()
                 if row is None:
                     cursor = conn.execute(
@@ -237,7 +261,7 @@ class BacklogService:
                 status = str(row["status"] or "pending")
                 campos: dict[str, Any] = {
                     "title": texto,
-                    "project": project,
+                    "page_id": page_id,
                     "source_done": int(bool(concluido)),
                     "updated_at": momento,
                 }
@@ -255,6 +279,85 @@ class BacklogService:
                 )
                 atualizados += 1
         return {"inserted": inseridos, "updated": atualizados, "total": len(items)}
+
+    # ------------------------------------------------------ reconciliacao
+    def known_projects(self) -> set[str]:
+        """Grupos de pagina que existem hoje no banco (fonte ``agenda``)."""
+        with self.store._lock, self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT project FROM backlog_items WHERE source = 'agenda'"
+            ).fetchall()
+        return {str(row["project"]) for row in rows if str(row["project"] or "")}
+
+    def project_of_page(self, page_id: str) -> str:
+        """Grupo que referencia esta pagina (para reconhecer renome)."""
+        with self.store._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT project FROM backlog_items WHERE source = 'agenda' "
+                "AND page_id = ? ORDER BY id ASC LIMIT 1",
+                (str(page_id),),
+            ).fetchone()
+        return str(row["project"]) if row else ""
+
+    def fingerprints_of(self, project: str) -> set[str]:
+        """Textos (normalizados) de um grupo, para casar a pagina renomeada."""
+        with self.store._lock, self._conn() as conn:
+            rows = conn.execute(
+                "SELECT fingerprint FROM backlog_items "
+                "WHERE source = 'agenda' AND project = ?",
+                (project,),
+            ).fetchall()
+        return {str(row["fingerprint"]) for row in rows if row["fingerprint"]}
+
+    def purge_project(self, project: str) -> int:
+        """Apaga o grupo cuja pagina saiu da Agenda; devolve quantos itens.
+
+        Apaga **todos** os estados, inclusive ``pr``/``done``: sem pagina o
+        grupo nao deveria aparecer. O PR continua no GitHub; o card e da
+        Agenda. Item de ``source='chat'`` nunca e tocado (nao tem pagina).
+        """
+        with self.store._lock, self._conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM backlog_items WHERE source = 'agenda' AND project = ?",
+                (str(project),),
+            )
+            return int(cursor.rowcount or 0)
+
+    def move_project(self, old: str, new: str) -> int:
+        """Leva os itens de ``old`` para ``new`` (pagina renomeada).
+
+        Preserva id, status, PR e ordem. Se o grupo novo ja tem um item com o
+        mesmo texto, o duplicado (o mais recente) sai antes do update, senao
+        a mesma linha apareceria duas vezes na tela.
+        """
+        if not old or not new or old == new:
+            return 0
+        with self.store._lock, self._conn() as conn:
+            novos = {
+                str(row["fingerprint"]): int(row["id"])
+                for row in conn.execute(
+                    "SELECT id, fingerprint FROM backlog_items "
+                    "WHERE source = 'agenda' AND project = ?",
+                    (new,),
+                ).fetchall()
+            }
+            antigos = conn.execute(
+                "SELECT id, fingerprint FROM backlog_items "
+                "WHERE source = 'agenda' AND project = ?",
+                (old,),
+            ).fetchall()
+            for row in antigos:
+                duplicado = novos.get(str(row["fingerprint"]))
+                if duplicado is not None and duplicado != int(row["id"]):
+                    conn.execute(
+                        "DELETE FROM backlog_items WHERE id = ?", (int(row["id"]),)
+                    )
+            cursor = conn.execute(
+                "UPDATE backlog_items SET project = ? "
+                "WHERE source = 'agenda' AND project = ?",
+                (new, old),
+            )
+            return int(cursor.rowcount or 0)
 
     def mark_queued(self, item_id: int) -> dict[str, Any]:
         momento = _now()
@@ -324,8 +427,9 @@ class BacklogService:
         """Remove itens de chat concluidos ha mais de N dias; devolve quantos.
 
         A tela so esconde (``cutoff``); esta funcao e a limpeza de verdade e
-        roda no worker. Item vindo da Agenda **nao** e apagado: a pagina e a
-        fonte e o item pode reaparecer na proxima sincronizacao.
+        roda no worker. Item vindo da Agenda **nao** e apagado aqui: quem manda
+        no grupo e a pagina, e purgar por tempo apagaria trabalho pendente de
+        uma pagina ainda viva (a ``facade`` purga so quando a pagina sumiu).
         """
         if self.prune_days <= 0:
             return 0
@@ -353,7 +457,7 @@ class BacklogService:
         grupos: dict[str, dict[str, Any]] = {}
         pesos = {"running": 0, "queued": 1, "failed": 2, "pending": 3, "pr": 4, "done": 5}
         for item in itens:
-            projeto = str(item.get("project") or item.get("page_id") or "chat")
+            projeto = str(item.get("project") or "chat")
             grupo = grupos.setdefault(
                 projeto, {"project": projeto, "page_id": "", "items": []}
             )

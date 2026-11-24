@@ -241,6 +241,8 @@
                                         color: var(--dim); font-weight: 400;
                                         overflow: hidden; text-overflow: ellipsis;
                                         white-space: nowrap; min-width: 0; }
+  /* Projeto sem mapeamento em [backlog.repos]: o despacho recusa ate definir. */
+  .backlog-card details.projeto .repo.falta { color: var(--err); }
   .backlog-card details.projeto > summary > .titulo {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap;
@@ -282,6 +284,7 @@
   .backlog-card .novo input { flex: 1 1 10ch; min-width: 0; padding: 6px 9px; border-radius: 8px;
                               border: 1px solid var(--line); background: var(--bg); color: var(--fg);
                               font: inherit; font-size: 12.5px; }
+  .backlog-card .novo input.repo-entrada { font-family: var(--mono); font-size: 12px; }
   .backlog-card .vazio { font-size: 12px; color: var(--dim); }
   .tag { font-size: 11px; border-radius: 999px; padding: 1px 8px; white-space: nowrap;
          border: 1px solid var(--line); color: var(--dim); }
@@ -511,8 +514,8 @@ const estado = {
   // Rascunho do campo "novo item", um por pele (`card` no aside, `agenda` na
   // tela): os dois cards tem nos proprios e nao podem compartilhar o texto.
   backlogRascunho: {
-    card: { texto: "", projeto: "" },
-    agenda: { texto: "", projeto: "" },
+    card: { texto: "", projeto: "", repo: "" },
+    agenda: { texto: "", projeto: "", repo: "" },
   },
 };
 
@@ -1382,9 +1385,14 @@ function backlogGrupo(grupo, { local }) {
     ? estado.backlogGrupos[chaveEstado]
     : Boolean(grupo.open);
   const no = window.Gaia.el("details", { class: "projeto", ...(aberto ? { open: "" } : {}) },
-    window.Gaia.el("summary", { title: chaveGrupo + (grupo.repo ? " · " + grupo.repo : "") },
+    window.Gaia.el("summary", {
+        title: chaveGrupo + (grupo.repo ? " · " + grupo.repo
+          : " · sem repositório: defina abaixo para poder despachar"),
+      },
       window.Gaia.el("span", { class: "titulo" }, grupo.title || grupo.project || "projeto"),
-      window.Gaia.el("span", { class: "repo" }, texto(grupo.repo || "")),
+      grupo.needs_repo
+        ? window.Gaia.el("span", { class: "repo falta" }, "sem repositório")
+        : window.Gaia.el("span", { class: "repo" }, texto(grupo.repo || "")),
       window.Gaia.el("span", { class: "contagem dica" }, contagens)),
     itens.length
       ? window.Gaia.el("ul", {}, itens.map(backlogLinha))
@@ -1535,11 +1543,21 @@ function backlogCorpo(dados, { local }) {
   const rascunho = estado.backlogRascunho[local];
   // A tela tem espaco: o campo de item novo pode citar o repo do projeto.
   const naTela = local !== "card";
-  const projetos = Object.keys(dados.repos || {});
+  // O seletor tem os projetos mapeados **e** os grupos que existem no card
+  // (pagina sem repo aparece aqui para a pessoa definir o repositorio).
+  const doMapa = Object.keys(dados.repos || {});
+  const doCard = grupos.map((grupo) => texto(grupo.project || "")).filter(Boolean);
+  const projetos = [...new Set([...doMapa, ...doCard])];
+  if (!rascunho.projeto && projetos.length) rascunho.projeto = projetos[0];
   const seletorProjeto = window.Gaia.el("select", {
     id: "backlog-projeto-" + local,
     title: "projeto do item novo",
-    onchange: (evento) => { rascunho.projeto = evento.target.value; },
+    onchange: (evento) => {
+      rascunho.projeto = evento.target.value;
+      // Redesenha para a linha "definir repositorio" aparecer/sumir sem
+      // depender de outro evento (o foco volta no `pintarBacklog`).
+      pintarBacklog(estado.backlogDados);
+    },
   }, (projetos.length ? projetos : ["chat"]).map((nome) =>
     window.Gaia.el("option", {
       value: nome,
@@ -1553,6 +1571,46 @@ function backlogCorpo(dados, { local }) {
     "aria-label": "novo item do backlog",
     oninput: (evento) => { rascunho.texto = evento.target.value; },
   });
+  // Projeto sem repositorio em [backlog.repos]: o campo aparece no proprio
+  // formulario (onde a pessoa esta) e grava no TOML. Sem isso o item fica
+  // pendente para sempre, porque o despacho recusa projeto sem repo.
+  const semRepo = Boolean(rascunho.projeto) && !(dados.repos || {})[rascunho.projeto];
+  const entradaRepo = window.Gaia.el("input", {
+    id: "backlog-repo-" + local,
+    class: "repo-entrada",
+    type: "text",
+    value: rascunho.repo,
+    placeholder: "dono/repo deste projeto",
+    "aria-label": "repositorio do projeto",
+    oninput: (evento) => { rascunho.repo = evento.target.value; },
+  });
+  const salvarRepo = async () => {
+    const projeto = seletorProjeto.value;
+    const repo = entradaRepo.value.trim();
+    if (!projeto || !repo) return;
+    try {
+      const resposta = await api("/backlog/repo", {
+        method: "POST",
+        body: JSON.stringify({ project: projeto, repo }),
+      });
+      rascunho.repo = "";
+      aviso("success", resposta.saved === false
+        ? projeto + " = " + resposta.repo + " (só neste processo: config não gravável)"
+        : projeto + " = " + resposta.repo + " (gravado no config.toml)");
+      await carregarBacklog();
+    } catch (erro) {
+      if (erro.status === 401) return tratar401(erro);
+      aviso("error", "não consegui salvar o repositório: " + texto(erro.message));
+    }
+  };
+  entradaRepo.addEventListener("keydown", (evento) => {
+    if (evento.key === "Enter") { evento.preventDefault(); salvarRepo(); }
+  });
+  const linhaRepo = semRepo
+    ? window.Gaia.el("div", { class: "novo" }, entradaRepo,
+        window.Gaia.el("button", { class: "pill", type: "button", onclick: salvarRepo },
+          "salvar repositório"))
+    : null;
   const adicionar = async () => {
     const valor = entradaNova.value.trim();
     if (!valor) return;
@@ -1584,6 +1642,11 @@ function backlogCorpo(dados, { local }) {
           "nenhum item ainda: clique em atualizar (lê a Agenda) ou adicione um item abaixo."),
     window.Gaia.el("div", { class: "novo" }, seletorProjeto, entradaNova,
       window.Gaia.el("button", { class: "pill", type: "button", onclick: adicionar }, "adicionar")),
+    linhaRepo,
+    dados.remove_orphans
+      ? window.Gaia.el("p", { class: "dica" },
+          "a página da Agenda é a fonte: apagar ou renomear a página lá apaga ou move o grupo aqui.")
+      : null,
     dados.prune_days
       ? window.Gaia.el("p", { class: "dica" },
           "itens concluídos somem daqui depois de " + dados.prune_days + " dias.")

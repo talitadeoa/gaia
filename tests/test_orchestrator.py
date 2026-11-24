@@ -1372,6 +1372,13 @@ async def test_aviso_sem_sonho_nao_fala(orch, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_catch_up_sonha_so_de_manha(orch, monkeypatch):
+    """Recupera o sonho perdido de manha; fora da janela e a noite.
+
+    A hora e fixada (o teste antigo usava ``datetime.now()``, entao as 03:00 --
+    dentro da janela de sonho -- ele falhava sozinho).
+    """
+    from gaia.controller import memory as memory_mod
+
     orch.cfg.memory.dream_enabled = True
     chamadas: list = []
 
@@ -1386,17 +1393,35 @@ async def test_catch_up_sonha_so_de_manha(orch, monkeypatch):
     monkeypatch.setattr(orch, "dream_day", fake_sonhar)
 
     agora = datetime.now().astimezone()
-    if agora.hour < 12:
-        # De manha: o sonho da noite passada e recuperado.
-        await orch._dream_catch_up()
-        ontem = agora.date() - timedelta(days=1)
-        assert chamadas == [ontem]
 
-    # Depois do meio-dia nao se escreve madrugada no meio da tarde.
-    tarde = agora.replace(hour=15, minute=0)
+    def fingir_hora(quando: datetime) -> None:
+        """Fixa ``datetime.now()`` dentro de ``controller/memory``."""
+        monkeypatch.setattr(
+            memory_mod,
+            "datetime",
+            type(
+                "Agora",
+                (datetime,),
+                {"now": classmethod(lambda cls, tz=None: quando)},
+            ),
+        )
+
+    # 09:30, fora da janela (02:00-08:00): recupera o sonho de ontem.
+    manha = agora.replace(hour=9, minute=30)
+    fingir_hora(manha)
     await orch._dream_catch_up()
-    if tarde.date() == agora.date() and agora.hour >= 12:
-        assert chamadas == []
+    assert chamadas == [manha.date() - timedelta(days=1)]
+
+    # 03:00 esta dentro da janela: o laco normal cuida, aqui nao se faz nada.
+    chamadas.clear()
+    fingir_hora(agora.replace(hour=3, minute=0))
+    await orch._dream_catch_up()
+    assert chamadas == []
+
+    # 15:00: nao se escreve madrugada no meio da tarde.
+    fingir_hora(agora.replace(hour=15, minute=0))
+    await orch._dream_catch_up()
+    assert chamadas == []
 
 
 @pytest.mark.asyncio

@@ -449,6 +449,13 @@ class OrchestratorTarget:
             raise RuntimeError("este motor nao tem backlog")
         return dict(await sincronizar() or {})
 
+    def backlog_set_repo(self, project: str, repo: str) -> dict[str, Any]:
+        """Projeto sem repositorio: salva ``[backlog.repos]`` no TOML."""
+        gravar = getattr(self.orch, "backlog_set_repo", None)
+        if not callable(gravar):
+            raise RuntimeError("este motor nao tem backlog")
+        return dict(gravar(project, repo) or {})
+
     # ------------------------------------------------------------- control center
     def run_awaitable(self, aguardavel: Any, timeout: float = 60.0) -> Any:
         """Executa um awaitable no loop do motor e devolve o resultado.
