@@ -17,8 +17,10 @@ from typing import Any
 
 from gaia.agenda.client import AgendaClient
 from gaia.agent import AgentClient, AgentError
+from gaia.agent.session import SessionPolicy
 from gaia.agent.types import SessionInfo
 from gaia.audio.recorder import ContinuousListener, Recorder
+from gaia.bots import Bot, BotIndisponivel, bot_problem, load_bots, require_bot
 from gaia.config import Config
 from gaia.controller.backlog import BacklogMixin
 from gaia.controller.briefing import BriefingMixin
@@ -28,7 +30,13 @@ from gaia.controller.contract import StreamSink
 from gaia.controller.goals import GoalTracker
 from gaia.controller.initiative import InitiativeMixin
 from gaia.controller.memory import MemoryMixin
-from gaia.controller.modes import PERSONAS, Persona, get_persona, resolve_mode
+from gaia.controller.modes import (
+    Persona,
+    get_persona,
+    persona_from_bot,
+    resolve_mode,
+    stored_mode_keys,
+)
 from gaia.controller.registration import RegistrationMixin
 from gaia.controller.routines import RoutineMixin
 from gaia.controller.scheduler import SchedulerMixin
@@ -98,6 +106,10 @@ class Orchestrator(
         # TTS de uma maquina headless e ninguem recebia nada.
         self.owns_telegram = channel == "telegram"
         self._adopt_legacy_history()
+        # Registry dos bots (default do codigo + `[bots.<id>]` do TOML). O que
+        # estiver mal configurado no TOML levanta aqui, no boot: um bot que
+        # nao consegue cumprir a allowlist/escopo nao sobe "meio ligado".
+        self.bots = load_bots(cfg)
         self.persona = resolve_mode(
             store.get_meta(self._mode_meta_key()) or cfg.interface.default_mode
         )
@@ -523,19 +535,30 @@ class Orchestrator(
             self.ui.warning(f"não foi possível indexar o Second Brain: {exc}")
 
     async def _open_session(
-        self, conversation_id: int, persona: Persona
+        self, conversation_id: int, persona: Persona, bot: Bot | None = None
     ) -> tuple[str, bool]:
         """Retoma a sessao da conversa ou cria uma nova.
 
         Devolve ``(session_id, criada)``. O segundo item diz se a sessao
         anterior sumiu (ou nunca existiu), para que o chamador possa reinjetar
         o historico local no proximo turno.
+
+        A politica do bot e aplicada **sempre** que a conversa pertence a um
+        bot com restricao (inclusive na sessao retomada): sem isso, uma
+        conversa da Donna aberta antes do restart voltaria com todas as
+        ferramentas. Conversa de bot sem restricao (o `gaia`) continua com o
+        catalogo inteiro do processo.
         """
         conv = self.store.get_conversation(conversation_id)
+        dono = bot or self._bot_for_mode(str(conv["mode"]))
+        esperado = self._bot_directory(dono)
         sid = conv["agent_session_id"]
         if self.cfg.agent.resume_session and sid:
             existing = await self.client.get_session(sid)
-            if existing and self._session_in_directory(existing):
+            if existing and self._session_in_directory(existing, esperado):
+                policy = self._policy_for(dono)
+                if policy is not None:
+                    self._apply_policy(sid, policy)
                 return sid, False
             if existing:
                 self.logger.warning(
@@ -543,7 +566,7 @@ class Orchestrator(
                     sid,
                     conversation_id,
                     existing.directory or "?",
-                    self.directory,
+                    esperado,
                 )
                 self.ui.warning(
                     "a conversa apontava para uma sessão de outro diretório; abrindo nova"
@@ -555,18 +578,75 @@ class Orchestrator(
                     conversation_id,
                 )
         session = await self.client.create_session(
-            title=f"Gaia — {self.directory.name} · {persona.name}",
-            model=self.client.model,
+            title=f"Gaia — {Path(esperado).name} · {persona.name}",
+            model=self._model_for(dono),
         )
         self.store.set_session(conversation_id, session.id)
+        policy = self._policy_for(dono)
+        if policy is not None:
+            self._apply_policy(session.id, policy)
         return session.id, True
 
-    def _session_in_directory(self, session: SessionInfo) -> bool:
+    def _apply_policy(self, session_id: str, policy: SessionPolicy) -> None:
+        """Fixa tools/diretorio/escopo na sessao (idempotente; no boot nao explode)."""
+        aplicar = getattr(self.client, "set_session_policy", None)
+        if not callable(aplicar):
+            return
+        try:
+            aplicar(session_id, policy)
+        except AgentError as exc:  # pragma: no cover - sessao sumiu no meio
+            self.logger.warning(
+                "nao foi possivel aplicar a politica do bot em %s: %s", session_id, exc
+            )
+
+    def _bot_for_mode(self, mode: str) -> Bot | None:
+        """Bot dono de uma conversa (pelo id/apelido gravado em `mode`)."""
+        persona = get_persona(mode)
+        if persona is None:
+            return None
+        registry = getattr(self, "bots", None) or {}
+        return registry.get(persona.key)
+
+    def _bot_directory(self, bot: Bot | None) -> Path:
+        """Diretorio da sessao: workspace do bot (relativo a raiz do projeto)."""
+        if bot is None or not bot.workspace.strip():
+            return self.directory
+        try:
+            return Path(bot.workspace).expanduser().resolve()
+        except OSError:  # pragma: no cover - defensivo
+            return self.directory
+
+    def _model_for(self, bot: Bot | None):
+        """Modelo do bot (`provider/model`); vazio herda o global."""
+        slug = (bot.model if bot is not None else "").strip()
+        if not slug:
+            return self.client.model
+        from gaia.agent.types import ModelRef
+
+        return ModelRef.parse(slug)
+
+    def _policy_for(self, bot: Bot | None) -> SessionPolicy | None:
+        """Politica da sessao do bot (``None`` = sem restricao, o `gaia`)."""
+        if bot is None:
+            return None
+        if bot.tools is None and not bot.scope.strip():
+            return None
+        return SessionPolicy(
+            tools=bot.tools,
+            directory=str(self._bot_directory(bot)),
+            scope=str(Path(bot.scope).expanduser().resolve()) if bot.scope.strip() else "",
+            bot=bot.id,
+        )
+
+    def _session_in_directory(
+        self, session: SessionInfo, esperado: Path | None = None
+    ) -> bool:
         """A API retoma sessao de qualquer diretorio; prompt so funciona no dono."""
         if not session.directory:
             return True
+        alvo = esperado or self.directory
         try:
-            return Path(session.directory).resolve() == self.directory.resolve()
+            return Path(session.directory).resolve() == alvo.resolve()
         except OSError:
             return False
 
@@ -582,6 +662,7 @@ class Orchestrator(
         persona: Persona,
         *,
         seed_history: bool = True,
+        bot: Bot | None = None,
     ) -> None:
         """Troca conversa+persona+sessao como uma unica operacao.
 
@@ -590,7 +671,8 @@ class Orchestrator(
         nao se cruzam.
         """
         async with self._transition_lock:
-            sid, created = await self._open_session(conversation_id, persona)
+            dono = bot or self._bot_for_mode(persona.key)
+            sid, created = await self._open_session(conversation_id, persona, dono)
             if created and seed_history:
                 context = self._history_context(conversation_id)
                 if context:
@@ -708,7 +790,31 @@ class Orchestrator(
                 continue
 
     def modes(self) -> list[Persona]:
-        return list(PERSONAS.values())
+        """Personas do registry efetivo (nome/diretriz do TOML valem no prompt)."""
+        return [persona_from_bot(bot) for bot in self.bots_list()]
+
+    def bots_list(self) -> list[Bot]:
+        """Bots do registry na ordem do codigo (a tela monta o rail daqui)."""
+        return list(getattr(self, "bots", {}).values())
+
+    def bot_for(self, key: str | None) -> Bot | None:
+        """Bot pelo id/apelido, ou ``None`` (quem chama decide o 400/aviso)."""
+        persona = get_persona(key)
+        if persona is None:
+            return None
+        return (getattr(self, "bots", None) or {}).get(persona.key)
+
+    def bot_status(self, bot: Bot) -> tuple[bool, str]:
+        """``(disponivel, motivo)``: bot configurado pode rodar nesta maquina?"""
+        problema = bot_problem(bot, getattr(self, "bots", None))
+        return (not problema, problema)
+
+    def bot_unavailable_message(self, bot: Bot, motivo: str) -> str:
+        """Mensagem legivel para o bot que nao pode subir (passo operacional)."""
+        return (
+            f"o bot {bot.name} ({bot.id}) nao esta disponivel: {motivo}. "
+            "Ajuste [bots.{}] no config ou crie a pasta.".format(bot.id)
+        )
 
     @property
     def mode_key(self) -> str:
@@ -719,22 +825,32 @@ class Orchestrator(
         return self.persona.name
 
     def sessions(self) -> list[dict[str, Any]]:
-        rows = self.store.list_conversations(
-            str(self.directory), self.persona.key, self.channel
-        )
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            result.append(
-                {
-                    "id": int(row["id"]),
+        """Conversas do bot ativo, incluindo as gravadas com a chave antiga.
+
+        A fase 1 renomeou os modos (`pesquisadora` -> `donna`), mas o `mode`
+        das conversas antigas nao muda sozinho: sem ler as chaves de
+        compatibilidade, o historico anterior sumiria da tela.
+        """
+        vistos: dict[int, dict[str, Any]] = {}
+        for chave in stored_mode_keys(self.persona.key, getattr(self, "bots", None)):
+            for row in self.store.list_conversations(
+                str(self.directory), chave, self.channel
+            ):
+                identificador = int(row["id"])
+                if identificador in vistos:
+                    continue
+                vistos[identificador] = {
+                    "id": identificador,
                     "title": row["title"] or "Sem título",
                     "updated_at": row["updated_at"],
                     "turns": int(row["turn_count"]),
                     "session_id": row["agent_session_id"] or "",
-                    "current": int(row["id"]) == self.conversation_id,
+                    "current": identificador == self.conversation_id,
                 }
-            )
-        return result
+        return sorted(
+            vistos.values(), key=lambda item: (item["updated_at"], item["id"]),
+            reverse=True,
+        )
 
     def history(self) -> list[tuple[str, str]]:
         if self.conversation_id is None:
@@ -745,22 +861,47 @@ class Orchestrator(
         ]
 
     async def select_mode(self, key: str) -> None:
+        """Troca de persona (compatibilidade): e a mesma coisa que `select_bot`."""
         persona = get_persona(key)
         if persona is None:
             return
+        await self.select_bot(persona.key)
+
+    async def select_bot(self, key: str) -> Bot:
+        """Ativa um bot: conversa propria, sessao propria e politica da sessao.
+
+        Levanta ``ValueError`` com id desconhecido (nunca cai no padrao em
+        silencio) e ``BotIndisponivel`` quando o bot esta bem configurado mas
+        depende de algo que esta maquina ainda nao tem (ex.: o clone da
+        dissertacao). A politica (tools/workspace/escopo) e aplicada em
+        `_open_session`, antes de qualquer turno.
+        """
+        bot = require_bot(key, getattr(self, "bots", None))
+        disponivel, motivo = self.bot_status(bot)
+        if not disponivel:
+            raise BotIndisponivel(self.bot_unavailable_message(bot, motivo))
+        persona = persona_from_bot(bot)
         conv = self.store.get_or_create_conversation(
-            str(self.directory), persona.key, self.channel
+            str(self.directory), bot.id, self.channel
         )
-        await self._activate_conversation(int(conv["id"]), persona)
+        await self._activate_conversation(int(conv["id"]), persona, bot=bot)
+        return bot
 
     async def select_conversation(self, conversation_id: int) -> None:
         try:
             conv = self.store.get_conversation(conversation_id)
         except KeyError:
             return
-        persona = resolve_mode(conv["mode"])
+        persona = self._persona_for_mode(str(conv["mode"]))
         self.store.set_current(conversation_id)
         await self._activate_conversation(conversation_id, persona)
+
+    def _persona_for_mode(self, mode: str) -> Persona:
+        """Persona de uma conversa gravada (chave antiga ou id de bot)."""
+        bot = self._bot_for_mode(mode)
+        if bot is not None:
+            return persona_from_bot(bot)
+        return resolve_mode(mode)
 
     async def new_session(self) -> None:
         await self._new_session()

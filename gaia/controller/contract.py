@@ -22,8 +22,11 @@ from typing import Any, Protocol
 
 from gaia.agenda.client import AgendaClient
 from gaia.agent import AgentClient
+from gaia.agent.session import SessionPolicy
+from gaia.agent.types import ModelRef
 from gaia.audio.recorder import ContinuousListener, Recorder
 from gaia.backlog.worker import BacklogWorker
+from gaia.bots.registry import Bot
 from gaia.config import Config
 from gaia.control.automations import Automation
 from gaia.controller.goals import GoalTracker
@@ -359,6 +362,35 @@ class OrchestratorContract(ABC):
 
     @abstractmethod
     async def select_mode(self, key: str) -> None:
+        ...
+
+    @abstractmethod
+    async def select_bot(self, key: str) -> Bot:
+        ...
+
+    @abstractmethod
+    def modes(self) -> list[Persona]:
+        ...
+
+    # --- registry de bots e politica de sessao ---
+    @abstractmethod
+    def _bot_for_mode(self, mode: str) -> Bot | None:
+        ...
+
+    @abstractmethod
+    def _bot_directory(self, bot: Bot | None) -> Path:
+        ...
+
+    @abstractmethod
+    def _model_for(self, bot: Bot | None) -> ModelRef:
+        ...
+
+    @abstractmethod
+    def _policy_for(self, bot: Bot | None) -> SessionPolicy | None:
+        ...
+
+    @abstractmethod
+    def _apply_policy(self, session_id: str, policy: SessionPolicy) -> None:
         ...
 
     # --- agendador (fase C) e handlers das automacoes ---
