@@ -58,6 +58,7 @@ KNOWN_TOOLS: frozenset[str] = frozenset(
         "estudos_metas",
         "estudos_pendentes",
         "estudos_progresso",
+        "falar_com_bot",
     }
 )
 
@@ -126,6 +127,9 @@ def default_bots(project_dir: str = "", data_dir: str = "") -> dict[str, Bot]:
             ),
             workspace=projeto,
             tools=None,
+            # A orquestradora fala com todos: e ela que encaminha o assunto de
+            # outra area para o bot certo (design §4.6).
+            can_message=("donna", "ariana", "sabrina", "ada"),
             aliases=(
                 "assistente",
                 "assistant",
@@ -166,6 +170,8 @@ def default_bots(project_dir: str = "", data_dir: str = "") -> dict[str, Bot]:
                 "mestrado",
                 "haraway",
             ),
+            # A Donna responde a orquestradora (e so a ela).
+            can_message=("gaia",),
         ),
         "ariana": _default_bot(
             "ariana",
@@ -207,8 +213,11 @@ def default_bots(project_dir: str = "", data_dir: str = "") -> dict[str, Bot]:
                 "em tecnologia, dados, automações ou qualidade de dados; melhore "
                 "currículo e portfólio, encontre vagas, adapte candidaturas, prepare "
                 "entrevistas e negocie propostas. Seja prática e direta, proponha "
-                "próximos passos concretos e prazos. O CV vive em ~/SecondBrain/cv: "
-                "nunca invente experiência, projeto ou formação — use o que está lá. "
+                "próximos passos concretos e prazos. O CV vive em ~/SecondBrain/cv e é "
+                "LaTeX: a base cv-pt.tex é intocável — para cada empresa crie "
+                "cv-pt-<empresa>.tex a partir dela, compile com pdflatex pelo bash "
+                "(aprovado a cada turno) e nunca edite a base nem invente experiência, "
+                "projeto ou formação: use só o que está nos arquivos. "
                 "Quando o assunto for buscar ou avaliar vaga, siga "
                 "~/SecondBrain/cv/playbook-vagas.md (fontes, filtros e rubrica de "
                 "score): leia o arquivo antes de opinar e mantenha as vagas em "

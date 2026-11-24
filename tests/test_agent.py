@@ -712,3 +712,33 @@ async def test_sem_policy_continua_com_todas_as_ferramentas(tmp_path, isolated_e
         assert client._allowed_tools_for(sessao, None) == set(client.tools.names())
     finally:
         await client.aclose()
+
+
+async def test_tool_context_leva_o_bot_da_politica(tmp_path, isolated_env):
+    """O contexto do turno carrega o `bot` (origem de `falar_com_bot`)."""
+    client = _client(tmp_path, isolated_env)
+    session = await client.create_session("donna")
+    client.set_session_policy(session.id, SessionPolicy(tools=("read",), bot="donna"))
+    try:
+        sessao = client._session(session.id)
+        assert sessao is not None
+        contexto = client._tool_context_for(sessao)
+        assert contexto.bot == "donna"
+        assert "falar_com_bot" not in client.tools.names()
+    finally:
+        await client.aclose()
+
+
+async def test_set_bot_bus_liga_a_ferramenta(tmp_path, isolated_env):
+    """Sem bus a ferramenta nao existe; com bus entra no catalogo (uma vez)."""
+    client = _client(tmp_path, isolated_env)
+    try:
+        assert "falar_com_bot" not in client.tools.names()
+        bus = object()
+        client.set_bot_bus(bus)
+        client.set_bot_bus(bus)  # idempotente
+        nomes = list(client.tools.names())
+        assert nomes.count("falar_com_bot") == 1
+        assert client._tool_context.bot_bus is bus
+    finally:
+        await client.aclose()

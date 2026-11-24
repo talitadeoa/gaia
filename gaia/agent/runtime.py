@@ -113,6 +113,22 @@ class AgentClient:
         """Canal entrega o MP3: callback(task, job) quando a narracao termina."""
         self._tool_context.audiobook_watch = callback
 
+    def set_bot_bus(self, bus: Any) -> None:
+        """Liga `falar_com_bot` (o `BotBus` do Orchestrator, criado no boot).
+
+        Idempotente e chamado uma vez: sem este gancho a ferramenta nao entra no
+        catalogo, porque o bus precisa do Orchestrator (que nasce depois do
+        AgentClient). A allowlist por bot continua sendo quem decide se aquele
+        bot tem a ferramenta.
+        """
+        if bus is None:
+            return
+        self._tool_context.bot_bus = bus
+        if self.cfg.agent.tools and "falar_com_bot" not in self.tools.names():
+            from gaia.agent.tools.bots import build_bot_tools
+
+            self.tools.add(*build_bot_tools())
+
     # -------------------------------------------------------------- politica
     def set_session_policy(
         self, session_id: str, policy: SessionPolicy | None
@@ -148,13 +164,16 @@ class AgentClient:
         return set(self.tools.names())
 
     def _tool_context_for(self, session: AgentSession) -> ToolContext:
-        """Contexto de ferramentas do turno: diretorio/escopo da politica.
+        """Contexto de ferramentas do turno: diretorio/escopo/bot da politica.
 
         Substitui os campos por sessao sem mexer no contexto global (que
-        continua sendo o do `gaia`, com todas as integracoes).
+        continua sendo o do `gaia`, com todas as integracoes). O `bot` da
+        politica e a origem de uma chamada entre bots (`falar_com_bot`).
         """
         policy = session.policy
-        if policy is None or not (policy.directory or policy.scope):
+        if policy is None:
+            return self._tool_context
+        if not (policy.directory or policy.scope or policy.bot):
             return self._tool_context
         return replace(
             self._tool_context,
@@ -164,6 +183,7 @@ class AgentClient:
                 else self._tool_context.directory
             ),
             scope=policy.scope,
+            bot=policy.bot,
         )
 
     # ------------------------------------------------------------------ config

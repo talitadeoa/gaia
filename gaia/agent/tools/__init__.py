@@ -9,6 +9,7 @@ from gaia.agent.tools.agenda import build_agenda_tools
 from gaia.agent.tools.audiobook import build_audiobook_tools
 from gaia.agent.tools.automations import build_automation_tools
 from gaia.agent.tools.base import Tool, ToolContext, ToolResult, ToolSet
+from gaia.agent.tools.bots import build_bot_tools
 from gaia.agent.tools.estudos import build_estudos_tools
 from gaia.agent.tools.filesystem import (
     EDIT_TOOL,
@@ -59,6 +60,10 @@ def build_tools(ctx: ToolContext) -> ToolSet:
     # `automations` (sem store ela nao teria onde criar nada).
     if ctx.cfg is not None and ctx.store is not None:
         tools.add(*build_automation_tools())
+    # Bots: `falar_com_bot` so existe com o bus ligado (o Orchestrator liga no
+    # boot). A allowlist de cada bot e que decide quem tem a ferramenta.
+    if getattr(ctx, "bot_bus", None) is not None:
+        tools.add(*build_bot_tools())
     return tools
 
 

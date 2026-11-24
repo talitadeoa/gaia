@@ -78,6 +78,8 @@ def test_known_tools_cobre_tudo_o_que_o_motor_registra(tmp_path):
         "post_x",
         "criar_automacao",
         "pi",
+        # `falar_com_bot` so entra com o bus ligado (no boot do Orchestrator).
+        "falar_com_bot",
     }
     assert registradas - KNOWN_TOOLS == set()
     assert KNOWN_TOOLS - opcionais - registradas == set()
@@ -292,3 +294,31 @@ async def test_bot_indisponivel_nao_e_ativado(tmp_path, isolated_env):
     finally:
         store.close()
         await client.aclose()
+
+
+def test_can_message_fecha_a_origem_da_chamada():
+    """Gaia fala com todos; a Donna so responde a Gaia (design §4.6)."""
+    assert set(DEFAULT_BOTS["gaia"].can_message) == {
+        "donna",
+        "ariana",
+        "sabrina",
+        "ada",
+    }
+    # Donna responde a orquestradora; Ariana, Sabrina e Ada nao precisam do
+    # canal inter-bot (o resumo delas e deterministico).
+    assert DEFAULT_BOTS["donna"].can_message == ("gaia",)
+
+
+def test_known_tools_inclui_falar_com_bot(tmp_path):
+    """A ferramenta nova precisa estar no KNOWN_TOOLS (allowlist de bot)."""
+    from gaia.agent.tools.bots import BOT_TOOLS
+
+    assert {spec["name"] for spec in BOT_TOOLS} <= KNOWN_TOOLS
+
+
+def test_sabrina_cv_em_latex_na_diretriz():
+    """Fase 3, item 14: a diretriz exige a base intocavel e o pdflatex."""
+    diretriz = DEFAULT_BOTS["sabrina"].directive
+    assert "cv-pt.tex" in diretriz and "pdflatex" in diretriz
+    assert "intocável" in diretriz
+    assert DEFAULT_BOTS["sabrina"].scope == "~/SecondBrain/cv"

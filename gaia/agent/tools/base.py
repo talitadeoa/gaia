@@ -54,10 +54,16 @@ class ToolContext:
     # Teto de leitura/escrita do filesystem (caminho do escopo). Vazio = sem
     # teto: quem manda e ``allow_outside_project``. Para um bot, e o que impede
     # a Donna de ler a pasta da Ada mesmo com `read` liberado.
-    # Fica por ULTIMO de proposito: os chamadores antigos passam posicional
-    # (directory, allow_outside_project, agenda, secondbrain, ...) e inserir
-    # um campo no meio mudaria a posicao de tudo silenciosamente.
+    # Fica depois dos campos antigos de proposito: os chamadores antigos passam
+    # posicional (directory, allow_outside_project, agenda, secondbrain, ...) e
+    # inserir um campo no meio mudaria a posicao de tudo silenciosamente.
     scope: str = ""
+    # Bus entre bots (`falar_com_bot`). Configurado pelo Orchestrator no boot;
+    # ``None`` = a ferramenta nem entra no catalogo.
+    bot_bus: Any = None
+    # Bot dono da sessao do turno (a origem de uma chamada entre bots). Vem da
+    # politica da sessao, nao do catalogo global.
+    bot: str = ""
 
     def resolve(self, raw: str) -> Path:
         if not (raw or "").strip():
