@@ -1,6 +1,7 @@
-# Handoff: OpenDesign em tudo (Mac feito, falta commit/push + mini)
+# Handoff: OpenDesign em tudo (APLICADO no Mac e no mini)
 
-Estado: 2026-11-24. HEAD `4fc7140` no Mac e no mini. Nada commitado ainda.
+Estado: 2026-11-24, HEAD `eef7a91` no Mac e no mini. Aplicado e verificado.
+O bloco "PROMPT" abaixo fica como registro do que foi feito.
 Leia `AGENTS.md` primeiro. Substitui o `2026-11-24-handoff-opendesign-api-key.md`
 (que ficou desatualizado: a troca do Mac ja foi feita, e a decisao agora e
 "opendesign em TUDO, com as outras chaves guardadas").
@@ -95,6 +96,35 @@ Deploy: git push origin main && gmin deploy
    `tests/conftest.py` + os 12 arquivos de teste do Control Center/automacoes
 4. `docs(plans): handoffs de opendesign, backlog, pi e privacidade`
    os 4 arquivos novos em `docs/plans/2026-11-24-*`
+
+## Resultado da aplicacao (2026-11-24)
+
+Mac:
+- 4 commits em `origin/main`: `d6255bb` (preset), `002c389` (privacidade/IP),
+  `26062fa` (fixtures de teste + F401), `eef7a91` (docs/handoffs).
+- Config efetiva `~/.config/gaia` + `~/.local/share/gaia`, com o banco bom do
+  launcher (`~/gaia/data`): 45 conversas / 1092 turns.
+- pytest, ruff e mypy verdes antes do push.
+
+Mini (`ssh gaia`):
+- `deploy-gaia` -> `eef7a91` (o timer estava com `NEXT -`, sem gatilho ativo;
+  rodei a mao).
+- `~/.config/gaia/config.toml`: provider/model/fast_model em opendesign, e
+  `[pi] model = "opendesign/deepseek-v4.1-flash"` (backup `.bak-opendesign`).
+- `~/.pi/agent/auth.json`: `{"opendesign": ...}` (600) — antes era `{}`.
+  `settings.json`: defaultProvider/defaultModel em opendesign.
+  Bridge `npm:@lokeraar/pi-opendesign-bridge` instalado.
+- `~/.config/gaia/.env` (600, backup `.env.bak-opendesign`):
+  `OPENDESIGN_API_KEY` + `GAIA_AGENT_API_KEY` com a chave do gateway;
+  `DEEPSEEK_API_KEY` e `COMMAND_CODE_API_KEY` **comentadas** (valor guardado).
+- Prova: `gaia doctor` -> `✓ provedor opendesign/deepseek-v4.1-flash`,
+  `✓ API opendesign ... 62 modelos`; `/health` -> `"model":
+  "opendesign/deepseek-v4.1-flash"`; `pi --print` -> `"provider":"opendesign"`;
+  `gaia --remote ... ask` responde pelo turno do serve.
+
+Para voltar a DeepSeek ou Command Code: descomentar a chave no
+`~/.config/gaia/.env` e trocar `provider`/`model`/`fast_model` no
+`~/.config/gaia/config.toml` (e `[pi] model` se quiser o pi junto).
 
 ## Estado do ambiente (referencia)
 
