@@ -21,8 +21,10 @@ from gaia.agent.session import SessionPolicy
 from gaia.agent.types import SessionInfo
 from gaia.audio.recorder import ContinuousListener, Recorder
 from gaia.bots import Bot, BotIndisponivel, bot_problem, load_bots, require_bot
+from gaia.bots.bus import BotBus
 from gaia.config import Config
 from gaia.controller.backlog import BacklogMixin
+from gaia.controller.bots import BotsMixin
 from gaia.controller.briefing import BriefingMixin
 from gaia.controller.career import CareerMixin
 from gaia.controller.commands import CommandsMixin
@@ -69,6 +71,7 @@ class Orchestrator(
     InitiativeMixin,
     SchedulerMixin,
     BacklogMixin,
+    BotsMixin,
 ):
 
     def __init__(
@@ -150,6 +153,8 @@ class Orchestrator(
         # Fila do backlog (card do web): um item por vez, estado no banco.
         self._backlog_worker = None
         self._retry_plan: dict[str, tuple[float, int]] = {}
+        # Bus entre bots (`falar_com_bot`): criado no boot, com o loop do motor.
+        self._bot_bus: BotBus | None = None
         self._proactive_count = 0
         self._proactive_day = datetime.now().astimezone().date()
         self._last_proactive = 0.0
@@ -229,6 +234,10 @@ class Orchestrator(
         ligar = getattr(self.client, "set_memory_store", None)
         if callable(ligar):
             ligar(self.store)
+        # Bus entre bots: `falar_com_bot` so entra no catalogo com ele ligado.
+        # O bus precisa do Orchestrator (que nasce depois do AgentClient), entao
+        # a ligacao tambem acontece aqui, uma vez.
+        self.start_bot_bus()
         if self.cfg.agent.auto_approve:
             self.ui.warning(
                 "auto-aprovação de ferramentas do agente está ATIVA (agent.auto_approve=true)"
@@ -250,6 +259,27 @@ class Orchestrator(
         # aqui (e nao no clique) faz um item enfileirado antes do restart
         # continuar depois dele.
         self.start_backlog()
+        self.start_bot_bus()
+
+    def start_bot_bus(self) -> BotBus | None:
+        """Liga `falar_com_bot` (idempotente; precisa do loop do motor).
+
+        Sem o bus a ferramenta nao existe: o catalogo do processo continua com
+        as outras, e a allowlist de cada bot decide quem tem a de falar. O
+        `bind_loop` usa o loop em que este metodo roda (o do motor).
+        """
+        bus = getattr(self, "_bot_bus", None)
+        if bus is None:
+            bus = BotBus(self)
+            self._bot_bus = bus
+        try:
+            bus.bind_loop(asyncio.get_running_loop())
+        except RuntimeError:  # chamado fora do loop (teste/boot parcial)
+            pass
+        ligar = getattr(self.client, "set_bot_bus", None)
+        if callable(ligar):
+            ligar(bus)
+        return bus
 
     def start_briefing(self) -> None:
         """Liga o briefing sem depender do bootstrap do agente."""
@@ -626,11 +656,16 @@ class Orchestrator(
         return ModelRef.parse(slug)
 
     def _policy_for(self, bot: Bot | None) -> SessionPolicy | None:
-        """Politica da sessao do bot (``None`` = sem restricao, o `gaia`)."""
+        """Politica da sessao do bot (``None`` = sem restricao, o `gaia`).
+
+        A Gaia nao tem allowlist nem escopo, mas continua com um `bot` na
+        politica: e a origem de uma chamada `falar_com_bot` e o campo fica
+        persistido na sessao como uma identidade, nao uma restricao.
+        """
         if bot is None:
             return None
-        if bot.tools is None and not bot.scope.strip():
-            return None
+        if bot.tools is None and not bot.scope.strip() and bot.id == "gaia":
+            return SessionPolicy(bot=bot.id)
         return SessionPolicy(
             tools=bot.tools,
             directory=str(self._bot_directory(bot)),

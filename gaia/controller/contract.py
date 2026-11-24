@@ -486,6 +486,58 @@ class OrchestratorContract(ABC):
     def backlog_set_repo(self, project: str, repo: str) -> dict[str, Any]:
         ...
 
+    # --- feed de atividade dos bots (mixin proprio) ---
+    @property
+    @abstractmethod
+    def mode_key(self) -> str:
+        ...
+
+    @abstractmethod
+    def bot_status(self, bot: Bot) -> tuple[bool, str]:
+        ...
+
+    @abstractmethod
+    def bot_unavailable_message(self, bot: Bot, motivo: str) -> str:
+        ...
+
+    @abstractmethod
+    async def _open_session(
+        self, conversation_id: int, persona: Persona, bot: Bot | None = None
+    ) -> tuple[str, bool]:
+        ...
+
+    @abstractmethod
+    def bot_activity(self, limit: int = 30, bot: str = "") -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def bot_seen(self, bot: str = "") -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def bot_message(
+        self, bot: str, kind: str = "job", title: str = "", text: str = ""
+    ) -> int:
+        ...
+
+    @abstractmethod
+    def bot_busy(self, bot_id: str) -> bool:
+        ...
+
+    @abstractmethod
+    async def run_bot_task(
+        self,
+        bot_id: str,
+        prompt: str,
+        *,
+        title: str = "",
+        automation_id: str = "",
+        trigger: str = "schedule",
+        attempt: int = 1,
+        depth: int = 0,
+    ) -> dict[str, Any]:
+        ...
+
     @abstractmethod
     async def _handle_backlog(self, argument: str) -> None:
         ...

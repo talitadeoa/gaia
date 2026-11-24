@@ -977,11 +977,14 @@ class MemoryStore:
             return int(cursor.lastrowid or 0)
 
     def list_bot_messages(
-        self, bot: str, limit: int = 50, unread_only: bool = False
+        self, bot: str = "", limit: int = 50, unread_only: bool = False
     ) -> list[dict[str, Any]]:
-        """Feed do bot, mais novo primeiro."""
-        sql = "SELECT * FROM bot_messages WHERE bot = ?"
-        valores: list[Any] = [bot]
+        """Feed do bot, mais novo primeiro. ``bot`` vazio = feed de todos."""
+        sql = "SELECT * FROM bot_messages WHERE 1 = 1"
+        valores: list[Any] = []
+        if bot:
+            sql += " AND bot = ?"
+            valores.append(bot)
         if unread_only:
             sql += " AND seen = 0"
         sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
@@ -990,13 +993,15 @@ class MemoryStore:
             rows = self._conn.execute(sql, valores).fetchall()
         return [dict(row) for row in rows]
 
-    def mark_bot_seen(self, bot: str) -> int:
-        """Marca tudo como lido e devolve quantos itens mudaram."""
+    def mark_bot_seen(self, bot: str = "") -> int:
+        """Marca tudo como lido e devolve quantos itens mudaram ("" = todos)."""
+        sql = "UPDATE bot_messages SET seen = 1 WHERE seen = 0"
+        valores: tuple[Any, ...] = ()
+        if bot:
+            sql += " AND bot = ?"
+            valores = (bot,)
         with self._lock, self._conn:
-            cursor = self._conn.execute(
-                "UPDATE bot_messages SET seen = 1 WHERE bot = ? AND seen = 0",
-                (bot,),
-            )
+            cursor = self._conn.execute(sql, valores)
             return cursor.rowcount
 
     def unread_by_bot(self) -> dict[str, int]:
