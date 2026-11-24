@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections.abc import Callable
 from http import HTTPStatus
@@ -297,6 +298,9 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return dados if isinstance(dados, dict) else None
 
+    def _corpo_automacao(self, corpo: dict[str, Any] | None) -> dict[str, Any] | None:
+        return corpo
+
     def _corpo_bytes(self, limite: int) -> bytes | None:
         """Corpo cru (audio do navegador). ``None`` = grande demais.
 
@@ -394,6 +398,11 @@ class _Handler(BaseHTTPRequestHandler):
             # O token exigido e o do chat: pausar uma rotina e operacao, nao
             # administracao de credencial (o painel continua dono de /control).
             self._automacoes()
+            return
+        if rota == "/automations/create":
+            # Criar automacao por frase/voz (botao "+ automacao" da tela).
+            # O token exigido e o do chat.
+            self._criar_automacao(corpo if isinstance(corpo, dict) else {})
             return
         if rota == "/providers":
             # Mesmo JSON de `/control/api/providers` (chaves sempre mascaradas).
@@ -548,6 +557,9 @@ class _Handler(BaseHTTPRequestHandler):
             # isso a tela confirma antes e mostra "rodando...".
             self._rodar_automacao(corpo)
             return
+        if rota == "/automations/create":
+            self._criar_automacao(corpo)
+            return
         if rota == "/proactive":
             # Checkbox da proatividade: grava no TOML e aplica no processo na
             # hora (o `/proativo on|off` da TUI faz o mesmo sem gravar).
@@ -614,6 +626,9 @@ class _Handler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {"ok": True, "model": slug, "messages": mensagens},
             )
+            return
+        if rota == "/bots":
+            self._criar_bot(corpo)
             return
         if rota == "/bots/seen":
             # Badge do rail: {bot?: "ariana"}; vazio zera todos.
@@ -1211,6 +1226,69 @@ class _Handler(BaseHTTPRequestHandler):
             self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "proactive_failed", str(exc))
             return
         self._json(HTTPStatus.OK, {"ok": True, "proactive": resultado})
+
+    def _criar_automacao(self, corpo: dict[str, Any]) -> None:
+        """Cria uma automacao a partir de uma frase/voz (botao da tela)."""
+        centro = self.app.center
+        if centro is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "no_center",
+                "automações exigem GAIA_CONTROL_TOKEN configurado",
+            )
+            return
+        texto_automacao = str(corpo.get("text") or "").strip()
+        if not texto_automacao:
+            self._erro(HTTPStatus.BAD_REQUEST, "empty_text", "texto vazio")
+            return
+        try:
+            from gaia.controller.automation_builder import propose_automation
+
+            resultado = propose_automation(texto_automacao, centro.cfg, centro.store)
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "status": resultado.status,
+                    "message": resultado.message,
+                    "automation_id": resultado.automation_id,
+                    "days": resultado.days,
+                    "at": resultado.at,
+                    "label": resultado.label,
+                },
+            )
+        except Exception as exc:
+            logger.warning("criar automacao falhou: %s", exc)
+            self._erro(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "automation_create_failed",
+                str(exc),
+            )
+
+    def _criar_bot(self, corpo: dict[str, Any]) -> None:
+        """Cria um novo bot no registry (memoria do processo)."""
+        from gaia.bots.registry import DEFAULT_BOTS, Bot
+        bot_id = str(corpo.get("id") or "").strip()
+        if not bot_id:
+            self._erro(HTTPStatus.BAD_REQUEST, "missing_id", "informe o id do bot")
+            return
+        if not re.fullmatch(r"[a-z0-9_-]+", bot_id):
+            self._erro(HTTPStatus.BAD_REQUEST, "invalid_id", "id do bot deve ser a-z, 0-9, _ ou -")
+            return
+        if bot_id in DEFAULT_BOTS:
+            self._erro(HTTPStatus.CONFLICT, "bot_exists", f"bot '{bot_id}' ja existe")
+            return
+        bot = Bot(
+            id=bot_id,
+            name=str(corpo.get("name") or bot_id).strip() or bot_id,
+            role=str(corpo.get("role") or "").strip(),
+            directive=str(corpo.get("directive") or "").strip(),
+            workspace=str(corpo.get("workspace") or "").strip(),
+            scope=str(corpo.get("scope") or "").strip(),
+            model=str(corpo.get("model") or "").strip(),
+        )
+        DEFAULT_BOTS[bot_id] = bot
+        self._json(HTTPStatus.OK, {"ok": True, "bot": bot_id})
 
     def _provedores(self) -> None:
         centro = self.app.center
