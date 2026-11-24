@@ -453,3 +453,45 @@ def test_agent_client_liga_a_ferramenta_ao_banco(tmp_path, cfg, store):
     # Idempotente: chamar de novo (todo bootstrap) nao duplica.
     client.set_memory_store(store)
     assert client.tools.names().count("criar_automacao") == 1
+
+
+# ------------------------------------------------------- bot_task (fase 3) ---
+
+
+def test_bot_task_reconhece_o_bot_e_o_pedido(cfg, store):
+    from gaia.controller.automation_builder import SKILL_BOT, parse_bot, parse_bot_prompt
+
+    assert parse_target("toda sexta as 10h pede pra Donna revisar o capitulo") == SKILL_BOT
+    assert parse_bot("pede pra Donna revisar") == "donna"
+    assert parse_bot_prompt("toda sexta as 10h pede pra Donna revisar o capitulo 2") == (
+        "revisar o capitulo 2"
+    )
+
+    resultado = propose_automation(
+        "toda sexta as 10h pede pra Donna revisar o capitulo 2", cfg, store, now=SEGUNDA
+    )
+    assert resultado.skill == SKILL_BOT
+    assert resultado.status in {"created", "paused"}
+    linha = store.get_automation(resultado.automation_id)
+    assert linha is not None
+    assert linha["bot"] == "donna"
+    assert json.loads(linha["params"])["prompt"] == "revisar o capitulo 2"
+    # A entrega e o painel: a resposta pode ser longa para o Telegram.
+    assert linha["delivery"] == "local"
+
+
+def test_bot_task_sem_pedido_pede_reformular(cfg, store):
+    resultado = propose_automation(
+        "toda sexta as 10h pede pra Donna", cfg, store, now=SEGUNDA
+    )
+    assert resultado.status == "reformulate"
+    assert "pedido" in resultado.message.lower()
+    assert store.list_automations() == []
+
+
+def test_bot_task_sem_horario_nao_cria(cfg, store):
+    resultado = propose_automation(
+        "pede pra Donna revisar o capitulo", cfg, store, now=SEGUNDA
+    )
+    assert resultado.status == "reformulate"
+    assert store.list_automations() == []

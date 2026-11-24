@@ -186,3 +186,80 @@ def _fake_await(valor):
         return valor
 
     return _coro()
+
+
+# ------------------------------------------------- Ariana no painel (fase 3) ---
+
+
+class _Watchlist:
+    def __init__(self, itens):
+        self.itens = itens
+
+    def all(self):
+        return list(self.itens)
+
+
+class _Item:
+    def __init__(self, ticker: str, label: str) -> None:
+        self.ticker = ticker
+        self.label = label
+
+
+def _orch_bolsa(cfg, store, telegram, itens):
+    """BriefingMixin sem o gate de Telegram: so o que a rotina da bolsa usa."""
+    instancia = _mixin_instance(BriefingMixin, cfg, store, telegram)
+    instancia.watchlist = _Watchlist(itens)
+    instancia._feeds = []
+
+    def bot_message(bot, kind="job", title="", text=""):
+        instancia._feeds.append((bot, kind, title, text))
+        return 1
+
+    instancia.bot_message = bot_message  # type: ignore[method-assign]
+    return instancia
+
+
+async def test_ariana_entrega_no_painel_sem_telegram(monkeypatch, cfg, store):
+    """Sem Telegram a automacao roda e o feed recebe o resumo (armadilha do AGENTS)."""
+    from gaia.controller import briefing as modulo
+
+    async def cotacao(ticker):
+        raise RuntimeError("sem rede")
+
+    monkeypatch.setattr(modulo, "fetch_quote", cotacao)
+    telegram = FakeTelegram()
+    telegram.enabled = False
+    item = _Item("PETR4", "Petrobras")
+    orch = _orch_bolsa(cfg, store, telegram, [item])
+
+    assert await orch._send_market_briefing(date(2026, 11, 23)) is True
+
+    assert telegram.enviados == []
+    bot, kind, _titulo, texto = orch._feeds[0]
+    assert (bot, kind) == ("ariana", "job")
+    assert "PETR4" in texto
+    row = store.list_runs(kind="market")[0]
+    assert row["bot"] == "ariana"
+    # Sem cotacao nenhuma o run diz por que faltou numero (nunca silencio).
+    assert row["status"] == "failed"
+    assert "PETR4" in row["error"]
+
+
+async def test_ariana_com_telegram_entrega_nos_dois(monkeypatch, cfg, store):
+    from gaia.controller import briefing as modulo
+    from gaia.finance.quotes import Quote
+
+    async def cotacao(ticker):
+        return Quote(ticker=ticker, price=38.5, change_pct=1.2, change=0.45)
+
+    monkeypatch.setattr(modulo, "fetch_quote", cotacao)
+    orch = _orch_bolsa(cfg, store, FakeTelegram(), [_Item("PETR4", "Petrobras")])
+
+    assert await orch._send_market_briefing(date(2026, 11, 23)) is True
+
+    assert orch.telegram.enviados and "Petrobras" in orch.telegram.enviados[0]
+    assert orch._feeds and "Petrobras" in orch._feeds[0][3]
+    row = store.list_runs(kind="market")[0]
+    assert row["status"] == "running" or row["status"] == "completed"
+    assert row["bot"] == "ariana"
+    assert "painel" in row["detail"] or "telegram" in row["detail"]

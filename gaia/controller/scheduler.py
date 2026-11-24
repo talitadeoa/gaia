@@ -51,6 +51,7 @@ USER_SKILL_METHODS: dict[str, str] = {
     "reminder": "_user_automation_reminder",
     "agenda_summary": "_user_automation_agenda",
     "estudos_summary": "_user_automation_estudos",
+    "bot_task": "_user_automation_bot_task",
 }
 
 USER_AUTOMATION_PREFIX = "user:"
@@ -90,13 +91,17 @@ class SchedulerMixin(OrchestratorContract):
                 )
 
     async def _scheduler_tick(self, now: datetime) -> None:
-        """Um ciclo: retries vencidos, depois automacoes devidas."""
+        """Um ciclo: retries vencidos, depois automacoes devidas.
+
+        A ocupacao e POR BOT (design §4.5): o turno da pessoa so bloqueia a
+        automacao do bot ativo, e um job de um bot nao espera o outro; dentro
+        do mesmo bot nunca ha dois turnos.
+        """
         await self._run_due_retries(now)
-        # Motor ocupado: nada de rotina competindo com o turno da pessoa.
-        if self._busy or self._recording or self._listening:
-            return
         for item in automations_mod.load(self.cfg, self.store):
             if not automations_mod.due(item, self.cfg, now, self.store):
+                continue
+            if self.bot_busy(item.bot):
                 continue
             if not automations_mod.claim(item, self.store, now):
                 continue
@@ -308,6 +313,63 @@ class SchedulerMixin(OrchestratorContract):
         if atributo:
             setattr(self, atributo, 0.0)
 
+    async def _automation_bot_task(
+        self,
+        item: automations_mod.Automation,
+        now: datetime,
+        *,
+        trigger: str = "schedule",
+        attempt: int = 1,
+    ) -> bool:
+        """Segmento comum das automacoes por prompt (registry ou `user:*`)."""
+        return await self._run_bot_task_item(
+            item,
+            prompt=str(item.params.get("prompt") or item.name),
+            trigger=trigger,
+            attempt=attempt,
+        )
+
+    async def _user_automation_bot_task(
+        self,
+        item: automations_mod.Automation,
+        now: datetime,
+        *,
+        trigger: str = "schedule",
+        attempt: int = 1,
+    ) -> bool:
+        """`user:*` criada pelo chat com skill `bot_task` (prompt no bot)."""
+        return await self._automation_bot_task(
+            item, now, trigger=trigger, attempt=attempt
+        )
+
+    async def _run_bot_task_item(
+        self,
+        item: automations_mod.Automation,
+        *,
+        prompt: str,
+        trigger: str,
+        attempt: int,
+    ) -> bool:
+        """Segundo plano por prompt: o run e o feed do bot sao a entrega.
+
+        Sem Telegram tambem funciona: a saida principal e `bot_messages` (o
+        painel). Falha ja vira mensagem no feed e run `failed` com
+        `error_kind`, entao o agendador decide retry sozinho.
+        """
+        try:
+            resultado = await self.run_bot_task(
+                item.bot or "gaia",
+                prompt,
+                title=item.name,
+                automation_id=item.id,
+                trigger=trigger,
+                attempt=attempt,
+            )
+        except Exception as exc:
+            self.logger.warning("bot_task %s falhou: %s", item.id, exc)
+            return False
+        return bool(resultado.get("ok"))
+
     async def _run_due_retries(self, now: datetime) -> None:
         for automation_id, (prazo, tentativa) in list(self._retry_plan.items()):
             if time.monotonic() < prazo:
@@ -316,8 +378,8 @@ class SchedulerMixin(OrchestratorContract):
             self._retry_plan.pop(automation_id, None)
             if item is None:
                 continue
-            if self._busy or self._recording or self._listening:
-                # Motor ocupado: devolve a tentativa para o proximo tick.
+            if self.bot_busy(item.bot):
+                # So a sessao daquele bot esta ocupada: a tentativa espera.
                 self._retry_plan[automation_id] = (time.monotonic(), tentativa)
                 continue
             await self._run_automation(item, now, trigger="retry", attempt=tentativa)
