@@ -108,7 +108,9 @@ class BacklogWorker:
         if not self.enabled:
             return
         await self._maybe_prune()
-        if self.service.active_count() >= self._max_running():
+        # So `running` conta para o limite: contar `queued` travava a fila (o
+        # primeiro item enfileirado nunca era pego).
+        if self.service.running_count() >= self._max_running():
             return
         item = self.service.next_queued()
         if item is None:

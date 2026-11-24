@@ -152,10 +152,23 @@ class BacklogService:
         return total
 
     def active_count(self) -> int:
+        """Itens em voo (fila + execucao)."""
         with self.store._lock, self._conn() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS total FROM backlog_items "
                 "WHERE status IN ('queued','running')"
+            ).fetchone()
+        return int(row["total"] if row else 0)
+
+    def running_count(self) -> int:
+        """Itens em execucao agora (o limite de concorrencia do worker).
+
+        Contar ``queued`` aqui travava a fila inteira: o item na fila ja
+        contava como "em voo", entao o worker nunca o pegava.
+        """
+        with self.store._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS total FROM backlog_items WHERE status = 'running'"
             ).fetchone()
         return int(row["total"] if row else 0)
 

@@ -301,6 +301,7 @@ def test_counts_e_next_queued(service):
     service.add_chat_item("b")
     service.mark_queued(int(a["id"]))
     assert service.active_count() == 1
+    assert service.running_count() == 0
     fila = service.next_queued()
     assert fila is not None and fila["id"] == a["id"]
     contadores = service.counts()
@@ -590,6 +591,50 @@ async def test_worker_marca_failed_e_avisa(store):
     atual = service.get(int(item["id"]))
     assert atual is not None and atual["status"] == "failed"
     assert avisos == ["gh caiu"]
+
+
+@pytest.mark.asyncio
+async def test_worker_pega_o_item_que_esta_apenas_queued(store):
+    """Regressao: `queued` contava como "em voo" e a fila nunca andava.
+
+    O item #65 do mini ficou `queued` por horas porque `active_count()`
+    (queued + running) era comparado com ``max_running=1``.
+    """
+    service = BacklogService(store)
+    item = service.add_chat_item("fila travada", project="gaia")
+    service.mark_queued(int(item["id"]))
+    from gaia.backlog.job import BacklogResult
+
+    executados: list[int] = []
+
+    class Job:
+        def execute(self, alvo):
+            executados.append(int(alvo["id"]))
+            return BacklogResult(ok=True, pr_url="https://github.com/o/r/pull/2", pr_number=2)
+
+    worker = BacklogWorker(service, lambda alvo: Job())
+    await worker._tick()
+    assert executados == [int(item["id"])]
+    assert service.get(int(item["id"]))["status"] == "pr"
+
+
+@pytest.mark.asyncio
+async def test_worker_nao_roda_dois_itens_de_uma_vez(store):
+    service = BacklogService(store)
+    primeiro = service.add_chat_item("um", project="gaia")
+    service.add_chat_item("dois", project="gaia")
+    service.mark_queued(int(primeiro["id"]))
+    service.mark_running(int(primeiro["id"]))
+    executados: list[int] = []
+
+    class Job:
+        def execute(self, alvo):
+            executados.append(int(alvo["id"]))
+            raise AssertionError("nao deveria executar")
+
+    worker = BacklogWorker(service, lambda alvo: Job())
+    await worker._tick()
+    assert executados == []
 
 
 def test_enqueue_recusa_com_backlog_desligado(store):
