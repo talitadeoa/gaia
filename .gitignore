@@ -23,7 +23,7 @@ dist/
 # Dados locais e pessoais (nunca versionar)
 .gaia/
 data/
-config/
+/config/
 config.toml.bak-*
 gaia.db
 gaia.db-*

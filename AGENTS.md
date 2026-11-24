@@ -156,8 +156,11 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `reset --hard` a cada 5 min e apagaria o trabalho. `pi.protect` bloqueia
   caminhos mesmo dentro da raiz. O binario sai de `pi.binary`, do `PATH` ou de
   `~/.pi/agent/bin/pi` (o runner acrescenta esse diretorio ao `PATH`, porque a
-  unidade de usuario nao tem login shell). Credencial e do ambiente: `GH_TOKEN`
-  para `gh`/`git`, `DEEPSEEK_API_KEY` para o modelo. Testes em
+  unidade de usuario nao tem login shell). Credencial do modelo e do ambiente:
+  `DEEPSEEK_API_KEY`. O GitHub **nao** vai no `.env`: `gh auth login` grava
+  `~/.config/gh/hosts.yml` (600) e o subprocesso herda por `HOME`; o workspace
+  usa o fork `piratistemica/*` como `origin` (`upstream` = `talitadeoa/*`) e o
+  PR sai com `--repo`/`--head piratistemica:<branch>`. Testes em
   `tests/test_pi.py` (JSONL fake, nada de rede, nenhum pi de verdade).
 - **Nova skill no Control Center:** adicione um `Skill(...)` em
   `gaia/control/skills.py` (id, kind, `requires`, `provides`, `schedule_hint`,
@@ -244,6 +247,14 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 - **Nova automação:** `controller/briefing.py` (janelas `*_at`/`*_until`) ou
   `controller/initiative.py` (lembretes/check-in); use `claim_meta` para
   garantir "uma vez por dia". Ex.: `_check_estudos` (cobra estudo atrasado).
+- **Proteger branch no GitHub:** `scripts/branches-protegidas.sh` (usuário
+  `talitadeoa`) aplica o ruleset `protege-branch-padrao` na branch padrao
+  (`~DEFAULT_BRANCH`, cobre `main`/`master`): proibe `deletion` e
+  `non_fast_forward` (push normal continua livre, sem PR obrigatorio) e sem
+  `bypass_actors`. Rode `--check` antes; e idempotente (reaproveita o ruleset
+  pelo nome). Nada de token no script: a credencial e a do `gh auth login`
+  (`~/.config/gh/hosts.yml`), nunca o `.env`. Repos cobertos por padrao:
+  `gaia`, `second-brain`, `agenda`, `abin-suite`, `estudos`.
 
 ## Armadilhas já descobertas
 

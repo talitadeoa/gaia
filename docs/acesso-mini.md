@@ -199,7 +199,7 @@ impede login nenhum dos tres servicos, porque so um deles precisaria de tela:
 
 | Servico | Como autentica no mini | Onde fica o segredo |
 |---|---|---|
-| GitHub | `gh auth login --with-token` (PAT fine-grained) ou device flow | `~/.config/gh/hosts.yml` / `GH_TOKEN` no `.env` |
+| GitHub | device flow (`piratistemica`) | `~/.config/gh/hosts.yml` (600) — **nunca** no `.env` |
 | Google | OAuth com `--no-launch-browser` + `ssh -L` do redirect | `~/.config/gcloud/` |
 | X | OAuth2 PKCE com `redirect_uri=localhost` + mesmo `ssh -L` | json de token do cliente |
 
@@ -208,41 +208,94 @@ O truque que dispensa instalar desktop: o fluxo OAuth escuta em
 e o consentimento abre no Safari do Mac. Nenhuma janela no mini e o `code` cai
 direto no processo de la.
 
-### GitHub em 5 minutos
+### GitHub: conta propria `piratistemica` (estado atual)
+
+Feito por **device flow** — nao precisou de PAT nem de senha no terminal. O
+codigo de 8 digitos e digitado em `github.com/login/device` no navegador do
+Mac, numa **janela privada** logada na conta da Gaia (sessao normal
+autorizaria a sua).
 
 ```bash
-ssh gaia
-sudo -n apt-get install -y gh          # 2.46, ja no apt
-gh auth login --hostname github.com --git-protocol https --with-token <<<"github_pat_..."
-gh auth setup-git                      # git push por https usa o token do gh
-gh auth status && gh repo list talitadeoa --limit 3
+ssh gaia 'gh auth login --hostname github.com --git-protocol https \
+  --scopes repo,read:org,workflow'
 ```
 
-O device flow tambem funciona sem browser local: `gh auth login` imprime um
-codigo de 8 digitos e voce abre `github.com/login/device` no Mac. Para o
-processo `gaia-serve.service` herdar a credencial, o caminho e o `.env`:
-`echo 'GH_TOKEN=github_pat_...' >> ~/.config/gaia/.env`.
+Escopos do token: `gist`, `read:org`, `repo`, `workflow`. `gh auth setup-git`
+depois disso escreve o helper em `~/.gitconfig`:
 
-**Use identidade propria.** Uma conta `talitadeoa-gaia` como collaborator (ou
-fork) + PAT fine-grained com `Contents` e `Pull requests` só no repo certo: se
-o agente for enganado por conteudo que leu, o pior caso e um PR num repo, nao
-a sua conta.
+```
+[credential "https://github.com"]
+    helper = !/usr/bin/gh auth git-credential
+```
 
-### `~/pr-workspace`: onde o pi trabalha
+**O segredo fica em `~/.config/gh/hosts.yml` (600) e em mais lugar nenhum.**
+Nada de `GH_TOKEN` no `~/.config/gaia/.env`: aquele arquivo e o
+`EnvironmentFile=` do `gaia-serve.service`, entao o token entraria no
+`os.environ` e o `bash` do agente o leria. O subprocesso do `pi` herda a
+credencial por `HOME` (o servico roda com `HOME=/home/talita`), que e o
+caminho desejado. Se um dia o `GH_TOKEN` for necessario no ambiente, use o
+cofre (`~/.config/gaia/secrets/github.env`, lido sob demanda por
+`gaia/secrets.py`) — nunca o `.env`.
+
+Identidade do git no mini (global e no `~/pr-workspace`):
+`piratistemica <piratistemica@users.noreply.github.com>`.
+
+### `~/pr-workspace`: fork como `origin`, upstream como `upstream`
 
 `~/gaia` e resetado (`git reset --hard origin/main`) a cada 5 min pelo
 `gaia-deploy.timer`. Branch de PR aberta ali e apagada. O clone de trabalho do
-pi e outro:
+pi e outro, e ele usa o **fork** como `origin` — a conta da Gaia nao tem push
+no repositorio da `talitadeoa` (`403`):
 
 ```bash
-ssh gaia 'git clone https://github.com/talitadeoa/gaia.git ~/pr-workspace'
+ssh gaia 'cd ~/pr-workspace && \
+  git remote set-url origin https://github.com/piratistemica/gaia.git && \
+  git remote add upstream https://github.com/talitadeoa/gaia.git'
 ```
 
-E `git` la precisa de identidade propria (o mini nao tem `--global`):
+Mesmo esquema em `~/pr-workspace/agenda` e `~/pr-workspace/abin-suite`
+(`origin` = fork `piratistemica/*`, `upstream` = `talitadeoa/*`). Os clones
+vizinhos ficam fora do indice da `gaia` por `.git/info/exclude` (nao no
+`.gitignore`, que e versionado).
+
+O fluxo de PR e: commitar num branch do fork, `git push origin <branch>`, e
+abrir contra o upstream nomeando o dono do fork:
 
 ```bash
-ssh gaia 'cd ~/pr-workspace && git config user.name "Gaia" && git config user.email "gaia@..."'
+gh pr create --repo talitadeoa/agenda --base master \
+  --head piratistemica:<branch> --title "..." --body "..."
+gh pr create --repo talitadeoa/gaia   --base main   \
+  --head piratistemica:<branch> --title "..." --body "..."
 ```
+
+`--repo`/`--head` sao obrigatorios: dentro do fork o `gh pr create` sem eles
+tenta abrir PR do fork para o fork (ou aborta pedindo `--head`). Validado de
+ponta a ponta: PR `talitadeoa/agenda#44` criado e fechado pela conta da Gaia.
+
+### Branch padrao protegida (`scripts/branches-protegidas.sh`)
+
+O `main` do `gaia` (e a branch padrao de `second-brain`, `agenda`, `abin-suite`,
+`estudos`) tem um **ruleset** `protege-branch-padrao`: `deletion` bloqueada e
+`non_fast_forward` bloqueado (force push nao passa). Push normal continua
+livre — nao ha PR obrigatorio nem status check exigido — porque o
+`gaia-deploy.timer` faz `reset --hard origin/main` e o `sb-sync` empurra commit
+direto na `main`.
+
+```bash
+scripts/branches-protegidas.sh --check   # mostra o que falta (nao muda nada)
+scripts/branches-protegidas.sh           # aplica; rode de novo a vontade
+OWNER=piratistemica REPOS=gaia scripts/branches-protegidas.sh
+```
+
+O ruleset segue a branch padrao do repo (`~DEFAULT_BRANCH`), entao `master`
+recebe a mesma regra sem ajuste. `bypass_actors` e vazio: nem admin escapa, e
+editar a regra exige desligar o ruleset. O script **nao** guarda token — usa o
+`gh` ja autenticado (o fork `piratistemica/*` pode rodar em modo `--check`, mas
+so tem admin onde a conta da Gaia e dona).
+
+> `allow_force_pushes`/`allow_deletions` da API antiga de
+> `/branches/{branch}/protection` foram **removidos** em favor do ruleset:
+> manter os dois ligados so duplicava a regra em telas diferentes.
 
 ### pi instalado e apontado para o Command Code
 
