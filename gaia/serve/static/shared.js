@@ -49,7 +49,9 @@
       else if (chave.startsWith("on")) no.addEventListener(chave.slice(2), valor);
       else no.setAttribute(chave, valor);
     }
-    for (const filho of filhos.flat()) {
+    // `flat(Infinity)`: listas de listas (grupos do backlog) viram filhos, e
+    // nunca o texto "[object HTMLDetailsElement]".
+    for (const filho of filhos.flat(Infinity)) {
       if (filho === null || filho === undefined || filho === false) continue;
       no.append(filho instanceof Node ? filho : document.createTextNode(String(filho)));
     }

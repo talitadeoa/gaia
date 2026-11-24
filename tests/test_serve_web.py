@@ -108,6 +108,53 @@ def test_tela_de_automacoes_no_html():
     assert '"deu certo"' in texto and '"não rodou"' in texto
 
 
+def test_card_de_backlog_expande_ao_clicar():
+    """O card do aside nasce recolhido e abre no clique, como o de automacoes.
+
+    O bug que isto guarda: o card despejava a lista crua no aside (com
+    `[object HTMLDetailsElement]` no lugar de cada projeto) e o cabecalho
+    repetia ``7 item(ns) · 3 pendente(s)``. Agora o mesmo componente desenha
+    os dois lugares (aside recolhido, tela `#automacoes` aberta).
+    """
+    texto, _ = _html()
+    assert 'id="backlog-card"' in texto and 'id="backlog-tela"' in texto
+    # Um componente so, com o estado de aberto/fechado por lugar.
+    assert "function backlogCard(dados, { local })" in texto
+    assert "function pintarBacklog(dados)" in texto
+    # O toggle redesenha so o lugar clicado (o outro card nao perde o foco).
+    assert "function pintarBacklogLocal(local)" in texto
+    assert "backlogDados: null" in texto
+    assert "backlogAbertura: { card: false, tela: true }" in texto
+    assert 'class: "topo abrir"' in texto and "aria-expanded" in texto
+    # Cada projeto e um collapsible de verdade (`details`/`summary`).
+    assert 'window.Gaia.el("details", { class: "projeto"' in texto
+    assert "window.Gaia.el(\"summary\", { title:" in texto
+    # O estado do collapsible do usuario sobrevive ao redesenho do SSE.
+    assert "estado.backlogGrupos" in texto and '"toggle"' in texto
+    # O resumo nao repete singular/plural entre parenteses.
+    assert 'total + " item(ns)' not in texto
+    assert 'pendentes + " pendente(s)"' not in texto
+    # O aside e a tela leem a mesma rota e o mesmo evento.
+    assert 'api("/backlog")' in texto and 'api("/backlog/sync"' in texto
+    assert 'api("/backlog/run"' in texto and 'api("/backlog/add"' in texto
+    assert 'case "backlog"' in texto
+    # Status do pedido: pendente -> enviado ao mini -> em execucao -> PR/erro.
+    for rotulo in ('"pendente"', '"enviado ao mini"', '"em execução no pi"',
+                   '"PR aberto"', '"erro"'):
+        assert rotulo in texto
+    # Limpeza de 7 dias visivel na tela (o servidor e que filtra).
+    assert "prune_days" in texto
+
+
+def test_el_achata_listas_de_filhos():
+    """`el("div", {}, [a, b])` precisa virar filhos, nao `[object ...]`."""
+    from gaia.serve import web
+
+    bruto, _ = web.static_asset("shared.js")  # type: ignore[misc]
+    js = bruto.decode("utf-8")
+    assert "filhos.flat(Infinity)" in js
+
+
 def test_botao_de_voz_no_html():
     """O modo voz e um contrato entre HTML, JS e rotas `/voice/*`."""
     texto, _ = _html()

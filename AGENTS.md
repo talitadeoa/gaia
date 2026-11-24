@@ -73,6 +73,7 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 | `gaia/estudos/` | progresso dos simulados do Abin Suite (Supabase proprio), tools `estudos_*` e cobranca proativa |
 | `gaia/career/`, `finance/`, `tasks/`, `focus.py` | rotinas de vagas, bolsa, tarefas, foco |
 | `gaia/pi/` | ponte com o pi: `config.py` (`[pi]` do TOML), `runner.py` (subprocesso `pi --print --mode json` → JSONL → `PiResult`) |
+| `gaia/backlog/` | card do backlog: `extract.py` (HTML da Agenda → itens), `service.py` (SQLite, schema v8), `job.py` (clone/branch/pi/commit/push/PR), `worker.py` (fila de um item), `facade.py`; o mixin e `gaia/controller/backlog.py` |
 
 ## Fluxo de um turno
 
@@ -189,6 +190,21 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `status`/`last_run` ja vem de `describe_automations` — nao reimplemente a
   regra na tela. Testes: `tests/test_serve_web.py` (contrato da view) e
   `tests/test_control_api.py` (rotas, 401/404/422/503, TOML e processo).
+- **Card de backlog (web):** o MESMO componente (`backlogCard(dados, {local})`)
+  desenha os dois lugares a partir de `GET /backlog`: no aside ele nasce
+  recolhido (cabecalho com `7 itens · 3 pendentes` + botao atualizar) e abre ao
+  clique; na tela `#automacoes` (`#backlog-tela`) ja nasce aberto, logo abaixo
+  das rotinas. O aberto/fechado do card (`estado.backlogAbertura`) e de cada
+  collapsible (`estado.backlogGrupos`, chave `local:projeto`) ficam no estado,
+  senao o redesenho do SSE fecha o que a pessoa abriu; o rascunho do campo
+  "novo item" (`estado.backlogRascunho`) tambem. Escrita: `POST /backlog/sync`
+  (Agenda), `/backlog/add` (chat/voz) e `/backlog/run` (despacha ao pi; 409 com
+  o motor ocupado). Status vem do servidor (`status`/`status_label`) — nao
+  reimplemente a regra na tela; a limpeza de 7 dias e do SQL (`prune_days`).
+  `el()` em `shared.js` achata listas de filhos com `flat(Infinity)`: devolver
+  uma lista de `<details>` sem isso imprime `[object HTMLDetailsElement]`.
+  Testes: `tests/test_serve_web.py` (contrato da tela) e `tests/test_backlog.py`
+  (rotas e o worker).
 - **Voz no web:** duas portas para o mesmo Whisper (`gaia/serve/voice.py`).
   `[serve] voice_source = "browser"` (padrao) faz o *navegador* gravar WAV
   16-bit mono e mandar em `POST /voice/upload` — o mini headless so transcreve;
@@ -321,6 +337,13 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   sessao de cookie no chat (`gaia_chat`) e no painel (`gaia_control`), seletor
   de instancia no header, modos, sessoes anteriores e proximas automacoes.
   Design em `docs/plans/2026-11-22-web-instances-sessao-design.md`.
+- Card de backlog (`gaia/backlog/`, schema v8) implementado de ponta a ponta:
+  sync das paginas "* backlog" da Agenda, itens do chat/voz, worker que roda um
+  item por vez no pi e abre o PR, evento SSE `backlog` e limpeza visual de 7
+  dias. No web ele e o MESMO componente no aside (recolhido, abre ao clique) e
+  na tela `#automacoes` (aberto). O que falta: o worker depende do pi/`gh`
+  autenticados no mini (o card mostra `erro` quando falta) e nao existe botao
+  para remover um item na tela (so `/backlog remover <id>`).
 - Segurança pendente: sandbox/env do `bash`, lock no `POST /turn`, aprovação
   remota vs. callback do Telegram, redação de `serve.token`, timeout de
   permissão.

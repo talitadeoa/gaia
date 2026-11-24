@@ -157,7 +157,7 @@ gaia --remote http://gaia:8787 ask "resuma o dia"
   `/automations`, `/providers`, `/models`, `/search`,
   `/events` (SSE); `POST /session`, `/turn`, `/permission/{id}`, `/abort`,
   `/model`, `/mode`, `/language`, `/chinese`, `/automations/set`, `/automations/run`,
-  `/proactive`,
+  `/proactive`, `/backlog/sync`, `/backlog/add`, `/backlog/run`,
   `/voice/listen`, `/voice/speak`, `/voice/stop`,
   `/session/open`, `/session/new`; `DELETE /session`.
 - Escutar fora do loopback **exige** `GAIA_SERVE_TOKEN`; a guarda recusa subir
@@ -214,6 +214,21 @@ gaia --remote http://gaia:8787 ask "resuma o dia"
   do modo voz e volta ao chat. O botão mostra "transcrevendo…" assim que o VAD
   fecha a fala (a tela sonda `GET /voice` para isso). Sem STT o botão nem
   aparece (`GET /voice` devolve o motivo).
+- **Card de backlog no web.** Abaixo das automações, um card recolhido no
+  aside (contagem + `atualizar`) que **abre ao clique**; na tela `#automacoes`
+  ele aparece aberto, logo abaixo das rotinas. Ele consolida dois lugares: as
+  páginas da Agenda cujo título termina em `backlog` (`gaia backlog`,
+  `agenda backlog`, `suite backlog` — `[backlog] agenda_suffix`) e os itens
+  adicionados por texto ou voz (`POST /backlog/add`). Cada projeto é um
+  collapsible com o repositório mapeado (`gaia` → `talitadeoa/gaia`, `agenda` →
+  `talitadeoa/agenda`, `suite` → `talitadeoa/abin-suite`) e cada item mostra o
+  status (`pendente` → `enviado ao mini` → `em execução no pi` → `PR aberto` /
+  `concluído`, ou `erro` com o motivo) e o botão **executar** (`POST
+  /backlog/run`), que enfileira o item na fila do mini: o pi implementa no clone,
+  a Gaia faz commit/push e abre o PR com `gh`, e o card é avisado pelo evento
+  SSE `backlog`. `POST /backlog/sync` relê as páginas da Agenda (`atualizar`).
+  Itens concluídos somem do card depois de `[backlog] prune_days` dias (7) —
+  some da visualização, nada é apagado do banco.
 - **Sessão de cookie em vez de token a cada visita.** `POST /session` troca o
   `Authorization: Bearer` por um nonce em cookie `HttpOnly` (`gaia_chat`,
   `Path=/`, `SameSite=Strict`); o `Bearer` continua valendo para `gaia
@@ -677,6 +692,7 @@ gaia browser screenshot https://exemplo.com captura.png
 | `/preferencia <texto>` · `/preferencias` | ensina · mostra preferências |
 | `/confirmar` · `/autoaprovar` | confirmação de notas · ferramentas |
 | `/chines on\|off\|en\|fr` · `/reiniciar` · `/sair` | eco de tradução (chinês, inglês ou francês) · reinicia · encerra |
+| `/backlog [sync\|add\|run\|remover]` | lista · relê as páginas da Agenda · adiciona item · despacha ao pi · apaga |
 
 `/ajuda` lista tudo com a descrição de cada um.
 
