@@ -210,8 +210,10 @@ class InterfaceConfig(BaseModel):
     echo_language: str = "zh"
     # Respostas renderizadas como Markdown (títulos, ênfase, código).
     markdown_render: bool = True
-    # Modo inicial: pesquisadora | trabalhadora | investidora | assistente.
-    default_mode: str = "assistente"
+    # Modo inicial: id de um bot (gaia | donna | ariana | sabrina | ada). As
+    # chaves antigas (assistente, pesquisadora, trabalhadora, investidora) e
+    # "conversa" continuam resolvendo pelos aliases do registry.
+    default_mode: str = "gaia"
 
     @field_validator("echo_language")
     @classmethod
@@ -222,6 +224,33 @@ class InterfaceConfig(BaseModel):
         if escolha not in ECHO_LANGUAGES:
             raise ValueError("echo_language deve ser zh, en ou fr")
         return escolha
+
+
+class BotConfig(BaseModel):
+    """Override de um bot especialista (`[bots.<id>]` do TOML).
+
+    O codigo (`gaia/bots/registry.py`) e a semente; aqui so entra o que a
+    pessoa decide. Campo vazio/ausente herda o default do codigo, e lista
+    ausente (`None`) herda tambem -- lista vazia e uma decisao ("nenhuma
+    ferramenta", "nenhum alias"). Segredo nao mora aqui.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = ""
+    role: str = ""
+    directive: str = ""
+    # cwd de bash/pi e raiz dos caminhos relativos.
+    workspace: str = ""
+    # Teto de leitura/escrita (absoluto, existente, contendo o workspace).
+    scope: str = ""
+    # Allowlist. Ausente = herda do codigo; `[]` = nenhuma ferramenta.
+    tools: list[str] | None = None
+    # provider/model do bot (vazio = modelo global).
+    model: str = ""
+    aliases: list[str] | None = None
+    # Bots que este pode chamar com `falar_com_bot` (fase 4).
+    can_message: list[str] | None = None
 
 
 class MemoryConfig(BaseModel):

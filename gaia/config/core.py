@@ -30,6 +30,7 @@ from gaia.config.models import (
     AgentConfig,
     AudioConfig,
     BacklogConfig,
+    BotConfig,
     BriefingConfig,
     BrowserConfig,
     CareerConfig,
@@ -73,6 +74,10 @@ class Config(BaseModel):
     audiobook: AudiobookConfig = Field(default_factory=AudiobookConfig)
     pi: PiConfig = Field(default_factory=PiConfig)
     backlog: BacklogConfig = Field(default_factory=BacklogConfig)
+    # Bots especialistas: `[bots.<id>]` sobrepoe o registry do codigo. Sem
+    # entrada em `_ENV_MAP` de proposito: nao existe parser de lista/dict no
+    # ambiente e a variavel viraria string.
+    bots: dict[str, BotConfig] = Field(default_factory=dict)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     x: XConfig = Field(default_factory=XConfig)
     data_dir: str = ""

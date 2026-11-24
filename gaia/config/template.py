@@ -302,6 +302,20 @@ quiet_hours = "23:00-08:00"
 check_interval_seconds = 30.0
 reminders = true
 
+# Bots especialistas: o codigo (gaia/bots/registry.py) e a semente e este bloco
+# e a decisao. Cada bot tem conversa, sessao, allowlist e area de trabalho
+# proprias; nada aqui e processo (o `gaia serve` continua sendo o unico
+# escritor). Campo omitido herda o default do codigo. Os ids sao definitivos
+# (viram `conversations.mode`): gaia, donna, ariana, sabrina, ada.
+# Mal configurado (ferramenta inexistente, workspace/scope ausente, scope que
+# nao contem o workspace) levanta erro no boot -- bot nao sobe meio ligado.
+#[bots.donna]
+#name = "Donna Haraway"
+#workspace = "~/dissertacao"   # cwd do bash/pi
+#scope = "~/dissertacao"       # teto de read/write/edit/list/glob/grep
+#tools = ["read", "list", "glob", "grep", "write", "edit", "bash", "pi"]
+#model = ""                    # vazio = modelo global
+
 [serve]
 # `gaia serve`: o mini processa e guarda tudo; as telas so desenham.
 # Ver docs/plans/2026-11-19-serve-cliente-fino.md.
