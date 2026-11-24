@@ -6,7 +6,6 @@ from datetime import date
 
 import pytest
 
-from gaia.config import Config
 from gaia.controller.briefing import BriefingMixin
 from gaia.controller.career import CareerMixin
 from gaia.memory.store import MemoryStore
@@ -30,18 +29,7 @@ class FakeStore(MemoryStore):
 
 
 @pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    cfg = Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
+def cfg(cfg):
     cfg.career.enabled = True
     cfg.briefing.enabled = True
     return cfg

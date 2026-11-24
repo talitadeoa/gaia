@@ -14,7 +14,6 @@ from datetime import datetime
 import pytest
 
 from gaia.agent.tools import ToolContext, build_tools
-from gaia.config import Config
 from gaia.control import automations as automations_mod
 from gaia.controller.automation_builder import (
     MAX_PER_DAY,
@@ -31,7 +30,6 @@ from gaia.controller.automation_builder import (
     score,
     window_for,
 )
-from gaia.memory.store import MemoryStore
 
 # 23/11/2026 e uma segunda-feira. 27/11/2026 e sexta.
 SEGUNDA = datetime(2026, 11, 23, 8, 0).astimezone()
@@ -39,21 +37,11 @@ SEXTA_9H = datetime(2026, 11, 27, 9, 5).astimezone()
 
 
 @pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    instance = Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
-    instance.telegram.enabled = True
-    instance.telegram.bot_token = "123:abc"
-    return instance
+def cfg(cfg):
+    """Config isolada (conftest) com Telegram ligado: entrega pede canal."""
+    cfg.telegram.enabled = True
+    cfg.telegram.bot_token = "123:abc"
+    return cfg
 
 
 # ------------------------------------------------------------------ parser

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from gaia.config import Config
 from gaia.control.health import (
     config_health,
     database_health,
@@ -16,22 +15,10 @@ from gaia.control.health import (
     system_health,
     telegram_health,
 )
-from gaia.memory.store import MemoryStore
 
 
 @pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    cfg = Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
+def cfg(cfg, tmp_path):
     raiz = tmp_path / "brain"
     (raiz / "Inbox").mkdir(parents=True)
     cfg.secondbrain.path = str(raiz)

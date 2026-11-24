@@ -4,28 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from gaia.config import Config
 from gaia.control.skills import SKILLS, describe_skills, find_skill, skill_status
-from gaia.memory.store import MemoryStore
 
 
 @pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    """Config isolada, com Telegram ligado e token presente."""
-    instance = Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
-    instance.telegram.enabled = True
-    instance.telegram.bot_token = "123:abc"
-    return instance
+def cfg(cfg):
+    """Config isolada (conftest), com Telegram ligado e token presente."""
+    cfg.telegram.enabled = True
+    cfg.telegram.bot_token = "123:abc"
+    return cfg
 
 
 def test_registry_tem_as_skills_iniciais():

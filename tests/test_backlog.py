@@ -35,8 +35,6 @@ from gaia.backlog.job import (
 )
 from gaia.backlog.service import BacklogService, fingerprint
 from gaia.backlog.worker import BacklogWorker
-from gaia.config import Config
-from gaia.memory.store import MemoryStore
 from gaia.pi.runner import PiResult
 
 # ---------------------------------------------------------------- extracao ---
@@ -90,21 +88,6 @@ def test_fingerprint_ignora_caixa_acento_e_pontuacao():
 
 
 # ------------------------------------------------------------------- banco ---
-
-
-@pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    return Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
 
 
 @pytest.fixture

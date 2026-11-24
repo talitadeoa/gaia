@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from gaia.config import Config, SecondBrainConfig
+from gaia.memory.store import MemoryStore
 from gaia.secondbrain.index import SecondBrainIndex
 from gaia.secondbrain.notes import SecondBrain
 
@@ -26,10 +27,25 @@ def isolated_env(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def cfg(tmp_path, isolated_env):
+def cfg(isolated_env):
+    """Config isolada; o caminho vem do ``GAIA_CONFIG`` do ``isolated_env``.
+
+    Nao recarregue a config a mao com outro ``config_path``: quem escreve no
+    TOML (painel, ``save_agent_model``) tem de cair em ``tmp_path``, nunca no
+    config real do usuario. Precisa de ajuste? Sobrescreva o fixture pedindo
+    ``cfg`` (``def cfg(cfg): ...``), como nos testes do Control Center.
+    """
     return Config.load(
-        config_path=tmp_path / "nao-existe.toml", env={"GAIA_DATA_DIR": str(tmp_path / "data")}
+        config_path=isolated_env / "config.toml",
+        env={"GAIA_DATA_DIR": str(isolated_env / "data")},
     )
+
+
+@pytest.fixture
+def store(tmp_path):
+    instance = MemoryStore(tmp_path / "gaia.db")
+    yield instance
+    instance.close()
 
 
 @pytest.fixture

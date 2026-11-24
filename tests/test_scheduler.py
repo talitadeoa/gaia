@@ -17,7 +17,6 @@ import pytest
 from gaia.control import automations as automations_mod
 from gaia.control.automations import Automation, seed
 from gaia.controller.scheduler import SchedulerMixin
-from gaia.memory.store import MemoryStore
 
 # 27/11/2026 e sexta-feira (0 = segunda).
 SEXTA_9H = datetime(2026, 11, 27, 9, 5).astimezone()
@@ -115,20 +114,8 @@ FakeOrchestrator = _concrete(_Agendador)
 
 
 @pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    from gaia.config import Config
-
-    carregado = Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
+def cfg(cfg):
+    carregado = cfg
     carregado.telegram.enabled = True
     carregado.telegram.bot_token = "1:abc"
     carregado.career.days = [0]
