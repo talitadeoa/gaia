@@ -206,14 +206,14 @@
   .backlog-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px;
                   background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
   .backlog-card .topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  /* O cabecalho e um botao (recolher/expandir), mas parece texto + seta. */
+  /* O cabecalho e um botao (abre a tela `#backlog`), mas parece texto + seta. */
   .backlog-card button.topo.abrir {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0;
     background: none; border: 0; border-radius: 0; color: var(--fg); font: inherit;
     text-align: left; cursor: pointer;
   }
   .backlog-card button.topo.abrir:hover { color: var(--fg); }
-  .backlog-card button.topo.abrir .seta { color: var(--dim); font-size: 11px; }
+  .backlog-card button.topo.abrir .seta { color: var(--dim); font-size: 12px; }
   .backlog-card button.topo.abrir .dica { color: var(--dim); font-size: 12px; }
   /* Aside estreito: o resumo pode quebrar em duas linhas em vez de virar
      reticencias, e o nome do repo sai (fica no title do summary). */
@@ -1330,12 +1330,15 @@ function pintarTelaBacklog(dados) {
 }
 
 /**
- * O card do backlog, com o aberto/fechado no estado (`backlogAbertura`).
+ * O card do backlog do aside.
  *
- * Recolhido, o cabecalho e o card inteiro: nome, contagem, "atualizar" e a
- * seta. Aberto, aparece a lista (um collapsible por projeto), o campo de item
- * novo e a nota da limpeza de 7 dias. Nada de contar em texto comprido no
- * cabecalho: o resumo e `7 itens · 3 pendentes`.
+ * Clicar no cabecalho ABRE A TELA `#backlog` (como o card de automacoes):
+ * no aside de 320px a lista fica apertada, e a tela tem o espaco para ler
+ * todos os estados, o repo de cada projeto e o campo de item novo. O botao
+ * "recolher" abre/fecha a lista aqui dentro; o cabecalho so navega.
+ *
+ * Recolhido, o cabecalho e o card inteiro (nome, contagem, "recolher" e
+ * "atualizar"). Aberto, aparece o corpo compartilhado (`backlogCorpo`).
  */
 function backlogCard(dados, { local }) {
   const grupos = Array.isArray(dados.groups) ? dados.groups : [];
@@ -1349,11 +1352,10 @@ function backlogCard(dados, { local }) {
   const cabecalho = window.Gaia.el("button", {
     class: "topo abrir",
     type: "button",
-    "aria-expanded": aberto ? "true" : "false",
-    title: aberto ? "recolher o backlog" : "expandir o backlog",
-    onclick: alternar,
+    title: "abrir o backlog na tela inteira",
+    onclick: () => irParaTela("#backlog"),
   },
-    window.Gaia.el("span", { class: "seta" }, aberto ? "▾" : "▸"),
+    window.Gaia.el("span", { class: "seta" }, "↗"),
     window.Gaia.el("span", { class: "nome" }, "Backlog"),
     window.Gaia.el("span", { class: "dica", title: resumo }, resumo));
   const atualizar = window.Gaia.el("button", {
@@ -1362,15 +1364,15 @@ function backlogCard(dados, { local }) {
     title: "consultar as páginas de backlog na Agenda e atualizar a lista",
     onclick: (evento) => sincronizarBacklog(evento.currentTarget),
   }, "atualizar");
-  // O card do aside e a versao curta: a tela `#backlog` tem o espaco para ler
-  // tudo. O toque no cabecalho continua so recolhendo/expandindo aqui.
-  const abrirTela = window.Gaia.el("button", {
+  // No card do aside a lista fica espremida: "recolher" e o unico toque que
+  // abre/fecha (o cabecalho navega para a tela `#backlog`).
+  const recolher = window.Gaia.el("button", {
     class: "pill",
     type: "button",
-    title: "abrir o backlog na tela inteira",
-    onclick: () => irParaTela("#backlog"),
-  }, "tela");
-  const ferramentas = [abrirTela, atualizar];
+    title: aberto ? "recolher a lista aqui" : "mostrar a lista aqui mesmo",
+    onclick: alternar,
+  }, aberto ? "recolher" : "expandir");
+  const ferramentas = [recolher, atualizar];
   if (!aberto) {
     return window.Gaia.el("div", { class: "backlog-card recolhido" },
       window.Gaia.el("div", { class: "topo" }, cabecalho, ferramentas));

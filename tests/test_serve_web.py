@@ -133,10 +133,11 @@ def test_tela_de_backlog_propria():
     assert 'alvo.replaceChildren(backlogCorpo(dados, { local: "agenda" }))' in texto
     assert '"#backlog-chat").addEventListener("click", voltarAoChat)' in texto
     assert '"#backlog-atualizar").addEventListener("click"' in texto
-    # O card recolhido do aside tem um botao "tela" (nao um clique fantasma
-    # no cabecalho, que continua recolhendo/expandindo).
-    assert '"abrir o backlog na tela inteira"' in texto
+    # Clicar no cabecalho do card do aside abre a tela; "recolher"/"expandir"
+    # e que mexe na lista dentro do aside.
+    assert 'title: "abrir o backlog na tela inteira"' in texto
     assert 'onclick: () => irParaTela("#backlog")' in texto
+    assert '"recolher" : "expandir"' in texto
 
 
 def test_card_de_backlog_expande_ao_clicar():
@@ -144,8 +145,9 @@ def test_card_de_backlog_expande_ao_clicar():
 
     O bug que isto guarda: o card despejava a lista crua no aside (com
     `[object HTMLDetailsElement]` no lugar de cada projeto) e o cabecalho
-    repetia ``7 item(ns) · 3 pendente(s)``. Agora o mesmo componente desenha
-    os dois lugares (aside recolhido, tela `#backlog` aberta).
+    repetia ``7 item(ns) · 3 pendente(s)``. Agora o mesmo corpo desenha os
+    dois lugares (aside recolhido, tela `#backlog` aberta) e o cabecalho
+    do aside NAVEGA para a tela; quem abre/fecha a lista ali e o "recolher".
     """
     texto, _ = _html()
     assert 'id="backlog-card"' in texto and 'id="backlog-tela"' in texto
@@ -157,7 +159,7 @@ def test_card_de_backlog_expande_ao_clicar():
     assert "function pintarBacklogCard()" in texto
     assert "backlogDados: null" in texto
     assert "backlogAbertura: { card: false }" in texto
-    assert 'class: "topo abrir"' in texto and "aria-expanded" in texto
+    assert 'class: "topo abrir"' in texto and 'onclick: () => irParaTela("#backlog")' in texto
     # Cada projeto e um collapsible de verdade (`details`/`summary`).
     assert 'window.Gaia.el("details", { class: "projeto"' in texto
     assert "window.Gaia.el(\"summary\", { title:" in texto

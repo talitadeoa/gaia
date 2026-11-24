@@ -192,7 +192,9 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `tests/test_control_api.py` (rotas, 401/404/422/503, TOML e processo).
 - **Backlog (web):** duas peles para o mesmo dado (`GET /backlog`). O card do
   aside (`#backlog-card`, `backlogCard`) nasce RECOLHIDO (`7 itens · 3
-  pendentes` + botoes "tela"/"atualizar") e abre ao clique no cabecalho; a tela
+  pendentes` + botoes "expandir"/"atualizar") e o CLIQUE NO CABECALHO abre a
+  tela — quem abre/fecha a lista dentro do aside e o botao "expandir"/"recolher"
+  (o cabecalho de automacoes so navega); a tela
   propria (`#view-backlog`, hash `#backlog`, como a de automacoes) usa o mesmo
   corpo (`backlogCorpo(dados, {local})`) sem cabecalho recolhivel, com resumo e
   botoes no header da view. `local` e `card` ou `agenda`: cada pele tem o seu
