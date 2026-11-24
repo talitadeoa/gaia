@@ -17,11 +17,12 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from gaia.agenda.client import AgendaClient
 from gaia.agent import AgentClient
 from gaia.audio.recorder import ContinuousListener, Recorder
+from gaia.backlog.worker import BacklogWorker
 from gaia.config import Config
 from gaia.control.automations import Automation
 from gaia.controller.goals import GoalTracker
@@ -117,6 +118,7 @@ class OrchestratorContract(ABC):
     _career_last_attempt: float
     _scheduler_task: asyncio.Task[None] | None
     _retry_plan: dict[str, tuple[float, int]]
+    _backlog_worker: BacklogWorker | None
     _proactive_count: int
     _proactive_day: date
     _last_proactive: float
@@ -390,6 +392,31 @@ class OrchestratorContract(ABC):
         trigger: str = "schedule",
         attempt: int = 1,
     ) -> bool:
+        ...
+
+    # --- backlog do painel (mixin proprio, chamado por comandos/rotas) ---
+    @abstractmethod
+    def backlog_snapshot(self) -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    async def backlog_sync(self) -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def backlog_add(self, text: str, project: str = "") -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def backlog_enqueue(self, item_id: int) -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def backlog_remove(self, item_id: int) -> bool:
+        ...
+
+    @abstractmethod
+    async def _handle_backlog(self, argument: str) -> None:
         ...
 
     @abstractmethod

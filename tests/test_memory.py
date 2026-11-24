@@ -385,7 +385,7 @@ def test_migracao_v5_para_v6_preserva_dados(tmp_path):
 def test_schema_v7_cria_tabela_automations(tmp_path):
     store = MemoryStore(tmp_path / "gaia.db")
     try:
-        assert store.schema_version() == 7
+        assert store.schema_version() >= 7
         colunas = {
             row["name"]
             for row in store._conn.execute(
@@ -422,7 +422,7 @@ def test_migracao_v6_para_v7_preserva_runs(tmp_path):
 
     store = MemoryStore(path)
     try:
-        assert store.schema_version() == 7
+        assert store.schema_version() >= 7
         assert store.list_runs(kind="career")[0]["detail"] == "3 vagas"
         assert store.list_automations() == []
     finally:

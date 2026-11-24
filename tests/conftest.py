@@ -19,6 +19,9 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GAIA_DOTENV", str(tmp_path / "nao-existe.env"))
     monkeypatch.setenv("GAIA_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GAIA_CONFIG", str(tmp_path / "config.toml"))
+    # Clones do backlog: nunca o ~/pr-workspace real (o worker de um teste nao
+    # pode clonar nem mexer em repositorio de verdade).
+    monkeypatch.setenv("GAIA_BACKLOG_WORKSPACE", str(tmp_path / "pr-workspace"))
     return tmp_path
 
 

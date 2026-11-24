@@ -416,6 +416,39 @@ class OrchestratorTarget:
         dados, tipo = preparado
         return {"audio": base64.b64encode(dados).decode("ascii"), "mime": tipo}
 
+    # --------------------------------------------------------------- backlog
+    def backlog_snapshot(self) -> dict[str, Any]:
+        """Card do backlog: grupos por projeto + estado da fila do pi."""
+        ler = getattr(self.orch, "backlog_snapshot", None)
+        if not callable(ler):
+            raise RuntimeError("este motor nao tem backlog")
+        return dict(ler() or {})
+
+    def backlog_add(self, text: str, project: str = "") -> dict[str, Any]:
+        """Item novo pelo chat/voz (o card e o `/backlog add` usam a mesma)."""
+        adicionar = getattr(self.orch, "backlog_add", None)
+        if not callable(adicionar):
+            raise RuntimeError("este motor nao tem backlog")
+        return dict(adicionar(text, project) or {})
+
+    def backlog_enqueue(self, item_id: int) -> dict[str, Any]:
+        """Enfileira o item no worker do pi (o clique no card)."""
+        enfileirar = getattr(self.orch, "backlog_enqueue", None)
+        if not callable(enfileirar):
+            raise RuntimeError("este motor nao tem backlog")
+        return dict(enfileirar(int(item_id)) or {})
+
+    async def backlog_sync(self) -> dict[str, Any]:
+        """Le a Agenda e atualiza os itens (botao "Atualizar" do card).
+
+        Assincrono porque busca paginas no Supabase; o transporte espera no
+        loop do motor com ``run_awaitable``.
+        """
+        sincronizar = getattr(self.orch, "backlog_sync", None)
+        if not callable(sincronizar):
+            raise RuntimeError("este motor nao tem backlog")
+        return dict(await sincronizar() or {})
+
     # ------------------------------------------------------------- control center
     def run_awaitable(self, aguardavel: Any, timeout: float = 60.0) -> Any:
         """Executa um awaitable no loop do motor e devolve o resultado.

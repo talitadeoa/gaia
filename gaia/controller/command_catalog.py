@@ -106,6 +106,12 @@ COMMANDS: tuple[Command, ...] = (
         ("/tarefas", "/tarefa"),
         True,
     ),
+    Command(
+        "/backlog [sync|add|run|remover]",
+        "card do backlog: sincroniza a Agenda, adiciona e despacha itens ao pi",
+        ("/backlog",),
+        True,
+    ),
     Command("/voz on|off|edge|say|none", "controla a voz", ("/voz",), True),
     Command(
         "/audiobook <arquivo> [título]",

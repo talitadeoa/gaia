@@ -202,6 +202,44 @@
                      margin-top: 3px; overflow-wrap: anywhere; }
   .auto .auto-erro { font-size: 12px; color: var(--err); margin-top: 4px;
                      overflow-wrap: anywhere; }
+  /* Backlog: card abaixo das automacoes, com um collapsible por projeto. */
+  .backlog-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+                  background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
+  .backlog-card .topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .backlog-card .nome { font-size: 14px; font-weight: 600; }
+  .backlog-card .topo .pill { margin-left: auto; }
+  .backlog-card .topo button.pill { margin-left: 0; }
+  .backlog-card .topo .espaco { flex: 1; }
+  .backlog-card details.projeto {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  }
+  .backlog-card details.projeto > summary {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+    cursor: pointer; list-style: none; font-size: 13px; font-weight: 600;
+  }
+  .backlog-card details.projeto > summary::-webkit-details-marker { display: none; }
+  .backlog-card details.projeto > summary::before { content: "▸"; color: var(--dim); }
+  .backlog-card details.projeto[open] > summary::before { content: "▾"; }
+  .backlog-card details.projeto .repo { font-family: var(--mono); font-size: 11px;
+                                        color: var(--dim); font-weight: 400; }
+  .backlog-card .contagem { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .backlog-card ul { list-style: none; margin: 0; padding: 4px 10px 10px; display: flex;
+                     flex-direction: column; gap: 6px; }
+  .backlog-card li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px;
+                     padding: 6px 8px; border-radius: 8px; background: var(--panel); }
+  .backlog-card li .texto { flex: 1; overflow-wrap: anywhere; }
+  .backlog-card li .texto small { display: block; color: var(--dim); font-size: 11px;
+                                  font-family: var(--mono); margin-top: 2px; }
+  .backlog-card li .acoes { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .backlog-card li button { padding: 2px 10px; font-size: 11px; }
+  .backlog-card li .pr { font-size: 11px; color: var(--accent); }
+  .backlog-card li .erro { color: var(--err); font-size: 11px; overflow-wrap: anywhere; }
+  .backlog-card .novo { display: flex; gap: 6px; }
+  .backlog-card .novo select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line);
+                               background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; }
+  .backlog-card .novo input { flex: 1; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--line);
+                              background: var(--bg); color: var(--fg); font: inherit; font-size: 12.5px; }
+  .backlog-card .vazio { font-size: 12px; color: var(--dim); }
   .tag { font-size: 11px; border-radius: 999px; padding: 1px 8px; white-space: nowrap;
          border: 1px solid var(--line); color: var(--dim); }
   .tag.ok { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
@@ -248,6 +286,8 @@
   <aside>
     <div id="motor"></div>
     <div id="automacoes"></div>
+    <!-- Backlog: paginas da Agenda + itens do chat, despachados ao pi (PR). -->
+    <div id="backlog-card" class="backlog-card" hidden></div>
     <div id="busca">
       <input id="q" type="search" placeholder="buscar no Second Brain" autocomplete="off">
     </div>
@@ -268,6 +308,9 @@
   </header>
   <div id="auto-proativo" class="auto-card"></div>
   <div id="auto-lista"></div>
+  <!-- Backlog logo abaixo das automacoes, como pedido: a mesma fonte do card
+       do aside (`GET /backlog`), sem duplicar logica. -->
+  <div id="backlog-tela"></div>
 </section>
 
 <footer>
@@ -745,6 +788,77 @@ async function carregarAutomacoes() {
   ));
 }
 
+/** Estado do card, ou null quando este motor não expõe o backlog. */
+async function carregarBacklog() {
+  const card = $("#backlog-card");
+  try {
+    const dados = await api("/backlog");
+    pintarBacklog(dados);
+    return dados;
+  } catch (erro) {
+    if (erro.status === 401) { tratar401(erro); return null; }
+    if (erro.status === 503) { card.hidden = true; card.replaceChildren(); return null; }
+    card.hidden = false;
+    card.replaceChildren(window.Gaia.el("p", { class: "vazio" },
+      "backlog indisponível: " + texto(erro.message)));
+    return null;
+  }
+}
+
+/** Botao "Atualizar": consulta as paginas da Agenda (rota de verdade). */
+async function sincronizarBacklog(botao) {
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "consultando…";
+  try {
+    const resultado = await api("/backlog/sync", { method: "POST", body: "{}" });
+    aviso("success",
+      "backlog: " + (resultado.pages || 0) + " pagina(s), "
+      + (resultado.inserted || 0) + " novo(s), "
+      + (resultado.updated || 0) + " atualizado(s).");
+    await carregarBacklog();
+  } catch (erro) {
+    if (erro.status === 401) { tratar401(erro); return; }
+    const motivo = erro.status === 503
+      ? "Agenda indisponível: configure o agenda.env_file no motor."
+      : texto(erro.message);
+    aviso("error", "não consegui atualizar o backlog: " + motivo);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = rotulo;
+  }
+}
+
+/** "Executar": enfileira o item no mini (o pi implementa e abre o PR). */
+async function executarBacklog(item, botao) {
+  const ok = window.confirm(
+    "Enviar este item ao mini agora?\n\n" + texto(item.title)
+    + "\n\nO pi implementa no repositório e abre um PR.",
+  );
+  if (!ok) return;
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "enviando…";
+  try {
+    const dados = await api("/backlog/run", {
+      method: "POST",
+      body: JSON.stringify({ id: item.id }),
+    });
+    aviso("success", "item #" + texto((dados.item || {}).id || item.id)
+      + " enviado ao mini: " + texto((dados.item || {}).status_label || "na fila"));
+    await carregarBacklog();
+  } catch (erro) {
+    if (erro.status === 401) { tratar401(erro); return; }
+    const motivo = erro.status === 409
+      ? "o motor está num turno; tente quando terminar"
+      : texto(erro.message);
+    aviso("error", "não consegui enviar o item: " + motivo);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = rotulo;
+  }
+}
+
 /** Lista da agenda, ou null quando este motor não tem Control Center. */
 async function agendaAutomacoes() {
   try {
@@ -946,6 +1060,174 @@ function tratar401(erro) {
   throw erro;
 }
 
+/* --------------------------------------------------------------- backlog --- */
+/**
+ * Card do backlog (abaixo de automacoes): consolida as paginas da Agenda cujo
+ * titulo termina em "backlog" com os itens adicionados pelo chat/voz. Cada
+ * projeto e um collapsible; cada item tem status e o botao "executar", que
+ * enfileira o item no mini e deixa o pi implementar ate abrir o PR.
+ *
+ * O estado NUNCA e inventado aqui: tudo vem de `GET /backlog` (o motor le o
+ * banco). O botao "atualizar" chama `POST /backlog/sync` (Agenda de verdade) e
+ * o polling do SSE (`evento backlog`) redesenha quando o worker termina.
+ */
+const BACKLOG_STATUS = {
+  pending: ["pendente", ""],
+  queued: ["enviado ao mini", "warn"],
+  running: ["em execução no pi", "warn"],
+  pr: ["PR aberto", "ok"],
+  done: ["concluído", "ok"],
+  failed: ["erro", "err"],
+};
+
+/** Item do backlog pronto para a tela (rotulo e classe de status). */
+function backlogStatus(item) {
+  const chave = texto(item.status);
+  const [rotulo, classe] = BACKLOG_STATUS[chave] || [texto(item.status_label) || chave, ""];
+  return { chave, rotulo, classe };
+}
+
+function backlogTag(item) {
+  const { rotulo, classe } = backlogStatus(item);
+  return window.Gaia.el("span", { class: "tag " + classe }, rotulo);
+}
+
+/** Linha de um item: status + texto + acao (executar ou abrir o PR). */
+function backlogLinha(item) {
+  const { chave } = backlogStatus(item);
+  const ocupado = chave === "queued" || chave === "running";
+  const executavel = chave === "pending" || chave === "failed";
+  const detalhe = item.repo && chave === "running" ? item.branch || "" : "";
+  const pr = item.pr_url
+    ? window.Gaia.el("a", {
+        class: "pr",
+        href: texto(item.pr_url),
+        target: "_blank",
+        rel: "noopener noreferrer",
+        title: "abrir o pull request",
+      }, "#" + (item.pr_number || "PR"))
+    : null;
+  const erro = item.status === "failed" && item.error
+    ? window.Gaia.el("span", { class: "erro", title: texto(item.error) }, texto(item.error))
+    : null;
+  return window.Gaia.el("li", { "data-id": texto(item.id) },
+    backlogTag(item),
+    window.Gaia.el("span", { class: "texto" },
+      texto(item.title),
+      detalhe ? window.Gaia.el("small", {}, detalhe) : null,
+      erro),
+    window.Gaia.el("span", { class: "acoes" },
+      pr,
+      executavel
+        ? window.Gaia.el("button", {
+            class: "pill",
+            type: "button",
+            title: "enviar este item ao mini: o pi implementa e abre o PR",
+            onclick: (evento) => executarBacklog(item, evento.currentTarget),
+          }, "executar")
+        : null,
+      ocupado ? window.Gaia.el("span", { class: "dica" }, "aguarde") : null),
+  );
+}
+
+/** Collapsible de um projeto (pagina da Agenda ou itens do chat). */
+function backlogGrupo(grupo) {
+  const itens = Array.isArray(grupo.items) ? grupo.items : [];
+  const contagens = Object.entries(grupo.counts || {})
+    .filter(([chave, total]) => total > 0 && chave !== "done")
+    .map(([chave, total]) => {
+      const [rotulo] = BACKLOG_STATUS[chave] || [chave, ""];
+      return (BACKLOG_STATUS[chave] ? rotulo : chave) + " " + total;
+    });
+  return window.Gaia.el("details", { class: "projeto", ...(grupo.open ? { open: "" } : {}) },
+    window.Gaia.el("summary", {},
+      texto(grupo.title || grupo.project || "projeto"),
+      window.Gaia.el("span", { class: "repo" }, texto(grupo.repo || "")),
+      window.Gaia.el("span", { class: "contagem dica" }, contagens.join(" · "))),
+    window.Gaia.el("ul", {}, itens.map(backlogLinha)),
+  );
+}
+
+/** Desenha o card (aside) e a copia na tela `#automacoes` a partir do JSON. */
+function pintarBacklog(dados) {
+  const card = $("#backlog-card");
+  const tela = $("#backlog-tela");
+  if (!dados || !dados.enabled) {
+    card.hidden = true;
+    card.replaceChildren();
+    tela.replaceChildren();
+    return;
+  }
+  card.hidden = false;
+  const grupos = Array.isArray(dados.groups) ? dados.groups : [];
+  const total = (dados.counts && dados.counts.total) || 0;
+  const pendentes = (dados.counts && dados.counts.pending) || 0;
+  const worker = dados.worker || {};
+  const projetos = Object.keys(dados.repos || {});
+  const seletorProjeto = window.Gaia.el("select", {
+    title: "projeto do item novo",
+  }, (projetos.length ? projetos : ["chat"]).map((nome) =>
+    window.Gaia.el("option", { value: nome }, nome)));
+  if (!projetos.length) {
+    seletorProjeto.append(window.Gaia.el("option", { value: "chat" }, "chat"));
+  }
+  const entradaNova = window.Gaia.el("input", {
+    type: "text",
+    placeholder: "novo item (texto ou voz)…",
+    "aria-label": "novo item do backlog",
+  });
+  const adicionar = async () => {
+    const valor = entradaNova.value.trim();
+    if (!valor) return;
+    entradaNova.value = "";
+    try {
+      await api("/backlog/add", {
+        method: "POST",
+        body: JSON.stringify({ text: valor, project: seletorProjeto.value }),
+      });
+      aviso("success", "item adicionado ao backlog.");
+      await carregarBacklog();
+    } catch (erro) {
+      if (erro.status === 401) return tratar401(erro);
+      aviso("error", "não consegui adicionar: " + texto(erro.message));
+    }
+  };
+  entradaNova.addEventListener("keydown", (evento) => {
+    if (evento.key === "Enter") { evento.preventDefault(); adicionar(); }
+  });
+  const conteudo = () => [
+    window.Gaia.el("div", { class: "topo" },
+      window.Gaia.el("span", { class: "nome" }, "Backlog"),
+      window.Gaia.el("span", { class: "dica" },
+        total + " item(ns) · " + pendentes + " pendente(s)"
+        + (worker.processing ? " · executando #" + worker.processing : "")),
+      window.Gaia.el("span", { class: "espaco" }),
+      window.Gaia.el("button", {
+        class: "pill",
+        type: "button",
+        title: "consultar as paginas de backlog na Agenda e atualizar a lista",
+        onclick: (evento) => sincronizarBacklog(evento.currentTarget),
+      }, "atualizar")),
+    worker.enabled === false
+      ? window.Gaia.el("div", { class: "notice warning" }, texto(dados.reason || "backlog desligado"))
+      : null,
+    grupos.length
+      ? grupos.map(backlogGrupo)
+      : [window.Gaia.el("p", { class: "vazio" },
+          "nenhum item ainda: clique em atualizar (lê a Agenda) ou adicione um item abaixo.")],
+    window.Gaia.el("div", { class: "novo" }, seletorProjeto, entradaNova,
+      window.Gaia.el("button", { class: "pill", type: "button", onclick: adicionar }, "adicionar")),
+    dados.prune_days
+      ? window.Gaia.el("p", { class: "dica" },
+          "itens concluídos somem daqui depois de " + dados.prune_days + " dias.")
+      : null,
+  ];
+  card.replaceChildren(...conteudo());
+  // A tela de automacoes tem o card logo abaixo da lista. O seletor/entrada
+  // sao recriados (nao ha como reaproveitar o mesmo no em dois lugares).
+  tela.replaceChildren(window.Gaia.el("div", { class: "backlog-card" }, ...conteudo()));
+}
+
 /* ---------------------------------------------------------------------- SSE */
 async function conectar() {
   if (estado.conectando) return;
@@ -1053,6 +1335,11 @@ function tratarEvento(evento) {
     case "proactive":
       bolha("say", evento.text, "gaia · proativo");
       break;
+    case "backlog":
+      // O worker avisa quando pega/termina um item: o card se redesenha sem
+      // esperar o polling. PR pronto e falha ja viram mensagem proativa.
+      carregarBacklog();
+      break;
     case "stream_begin":
       estado.fluxo = bolha("say", "", "gaia");
       break;
@@ -1150,6 +1437,7 @@ function tratarEvento(evento) {
       estado.voz.eraVoz = false;
       carregarEngine();
       carregarAutomacoes(); // uma skill pode ter rodado neste turno
+      carregarBacklog();    // e um item do backlog pode ter sido despachado
       break;
     case "aborted":
       finalizar("");
@@ -2161,6 +2449,7 @@ $("#login").addEventListener("close", async () => {
   // O login destrava a agenda do motor: sem isto o botao do header so
   // aparecia depois de um F5 (o boot tinha desistido antes da sessao).
   carregarAutomacoes();
+  carregarBacklog();
   pintarTelaAtual();
 });
 
@@ -2284,6 +2573,7 @@ window.addEventListener("hashchange", pintarTelaAtual);
   carregarVoz();
   carregarComandos();
   carregarAutomacoes();
+  carregarBacklog();
   conectar();
   // O hash e a fonte de verdade da tela (`#automacoes`): F5, link e o
   // voltar/avancar do navegador continuam na mesma tela.

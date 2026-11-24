@@ -370,6 +370,11 @@ class _Handler(BaseHTTPRequestHandler):
         if rota == "/engine":
             self._json(HTTPStatus.OK, self._engine())
             return
+        if rota == "/backlog":
+            # Card do backlog: paginas "backlog" da Agenda + itens do chat, com
+            # o estado do despacho ao pi. Leitura pura (o banco e a verdade).
+            self._backlog()
+            return
         if rota == "/automations":
             # Agenda + estado da proatividade para a tela de automacoes do chat.
             # O token exigido e o do chat: pausar uma rotina e operacao, nao
@@ -488,6 +493,18 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if rota == "/voice/speak":
             self._falar(corpo)
+            return
+        if rota == "/backlog/sync":
+            # Botao "Atualizar": consulta a Agenda AGORA (pode levar segundos).
+            self._backlog_sync()
+            return
+        if rota == "/backlog/add":
+            # Item novo pelo chat/voz (o card tem o campo; o /backlog add tambem).
+            self._backlog_add(corpo)
+            return
+        if rota == "/backlog/run":
+            # Botao "Executar": enfileira o item; o worker executa e avisa.
+            self._backlog_run(corpo)
             return
         if rota == "/automations/set":
             # Checkbox da tela de automacoes: {id, enabled}. Separada de
@@ -789,6 +806,109 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.warning("automations falhou: %s", exc)
             self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "automations_failed", str(exc))
+
+    # ------------------------------------------------------------------ backlog
+    def _backlog(self) -> None:
+        """GET /backlog: grupos por projeto, contadores e estado do worker."""
+        funcao = _opcional(self.app.target, "backlog_snapshot")
+        if funcao is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "backlog_unavailable",
+                "backlog indisponivel neste motor",
+            )
+            return
+        try:
+            self._json(HTTPStatus.OK, funcao())
+        except Exception as exc:
+            logger.warning("backlog falhou: %s", exc, exc_info=True)
+            self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "backlog_failed", str(exc))
+
+    def _backlog_sync(self) -> None:
+        """POST /backlog/sync: le as paginas da Agenda e grava os itens."""
+        funcao = _opcional(self.app.target, "backlog_sync")
+        if funcao is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "backlog_unavailable",
+                "backlog indisponivel neste motor",
+            )
+            return
+        try:
+            resultado = _aguardar(self, funcao())
+        except RuntimeError as exc:
+            # Backlog desligado ou motor sem loop: a pessoa corrige config.
+            self._erro(HTTPStatus.SERVICE_UNAVAILABLE, "backlog_disabled", str(exc))
+            return
+        except Exception as exc:
+            # Agenda fora do ar/credencial: a tela mostra o motivo real.
+            logger.warning("backlog sync falhou: %s", exc)
+            self._erro(HTTPStatus.SERVICE_UNAVAILABLE, "agenda_failed", str(exc))
+            return
+        self._json(HTTPStatus.OK, resultado)
+
+    def _backlog_add(self, corpo: dict[str, Any]) -> None:
+        """POST /backlog/add: item novo pelo chat/voz."""
+        funcao = _opcional(self.app.target, "backlog_add")
+        if funcao is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "backlog_unavailable",
+                "backlog indisponivel neste motor",
+            )
+            return
+        texto = str(corpo.get("text") or "").strip()
+        if not texto:
+            self._erro(HTTPStatus.BAD_REQUEST, "empty_text", "texto vazio")
+            return
+        projeto = str(corpo.get("project") or "").strip()
+        try:
+            item = funcao(texto, projeto)
+        except ValueError as exc:
+            self._erro(HTTPStatus.BAD_REQUEST, "bad_item", str(exc))
+            return
+        except RuntimeError as exc:
+            self._erro(HTTPStatus.SERVICE_UNAVAILABLE, "backlog_disabled", str(exc))
+            return
+        except Exception as exc:
+            logger.warning("backlog add falhou: %s", exc)
+            self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "backlog_failed", str(exc))
+            return
+        self._json(HTTPStatus.OK, {"ok": True, "item": item})
+
+    def _backlog_run(self, corpo: dict[str, Any]) -> None:
+        """POST /backlog/run: enfileira o item para o mini/pi."""
+        funcao = _opcional(self.app.target, "backlog_enqueue")
+        if funcao is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "backlog_unavailable",
+                "backlog indisponivel neste motor",
+            )
+            return
+        bruto = corpo.get("id")
+        try:
+            if bruto is None:
+                raise TypeError("id ausente")
+            item_id = int(bruto)
+        except (TypeError, ValueError):
+            self._erro(HTTPStatus.BAD_REQUEST, "missing_id", "informe o id do item")
+            return
+        try:
+            item = funcao(item_id)
+        except KeyError:
+            self._erro(
+                HTTPStatus.NOT_FOUND, "unknown_item", f"item de backlog desconhecido: {item_id}"
+            )
+            return
+        except RuntimeError as exc:
+            self._erro(HTTPStatus.SERVICE_UNAVAILABLE, "backlog_disabled", str(exc))
+            return
+        except Exception as exc:
+            logger.warning("backlog run falhou: %s", exc)
+            self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "backlog_failed", str(exc))
+            return
+        self._json(HTTPStatus.ACCEPTED, {"ok": True, "item": item})
 
     def _mudar_automacao(self, corpo: dict[str, Any]) -> None:
         """Liga/desliga (ou edita horario de) uma automacao pela tabela."""

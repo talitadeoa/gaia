@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 # Versao atual do schema. Incremente ao adicionar novas migracoes em _migrate.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # v5: conversas separadas por canal (cli, telegram, whatsapp).
 DEFAULT_CHANNEL = "cli"
@@ -140,6 +140,41 @@ class MemoryStore:
                     last_result TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
+
+                -- v8: backlog do painel (paginas "backlog" da Agenda + o que
+                -- chega pelo chat/voz). O item guarda o estado do despacho ao
+                -- pi; a limpeza de 7 dias e por filtro de finished_at, entao o
+                -- historico continua aqui.
+                CREATE TABLE IF NOT EXISTS backlog_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL DEFAULT 'agenda',
+                    page_id TEXT NOT NULL DEFAULT '',
+                    project TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    title_html TEXT NOT NULL DEFAULT '',
+                    context TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    source_done INTEGER NOT NULL DEFAULT 0,
+                    fingerprint TEXT NOT NULL DEFAULT '',
+                    repo TEXT NOT NULL DEFAULT '',
+                    branch TEXT NOT NULL DEFAULT '',
+                    pr_url TEXT NOT NULL DEFAULT '',
+                    pr_number INTEGER NOT NULL DEFAULT 0,
+                    detail TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    queued_at TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL DEFAULT '',
+                    finished_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_backlog_status
+                    ON backlog_items(status, id);
+                CREATE INDEX IF NOT EXISTS idx_backlog_page
+                    ON backlog_items(source, page_id, fingerprint);
+                CREATE INDEX IF NOT EXISTS idx_backlog_finished
+                    ON backlog_items(status, finished_at);
                 """
             )
             self._migrate()
@@ -809,6 +844,15 @@ class MemoryStore:
                 valores,
             )
             return cursor.rowcount > 0
+
+    def backlog_ready(self) -> bool:
+        """A tabela do backlog existe? (banco migrado para o schema v8)"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'backlog_items'"
+            ).fetchone()
+        return row is not None
 
     def stats(self) -> dict[str, Any]:
         with self._lock:

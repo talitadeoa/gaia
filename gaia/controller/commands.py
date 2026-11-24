@@ -113,6 +113,8 @@ class CommandsMixin(OrchestratorContract):
             await self._handle_focus(argument)
         elif command in {"/tarefas", "/tarefa"}:
             await self._handle_tasks(argument)
+        elif command == "/backlog":
+            await self._handle_backlog(argument)
         elif command == "/voz":
             self._switch_voice(argument)
         elif command in {"/audiobook", "/audiolivro"}:

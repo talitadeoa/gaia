@@ -20,6 +20,7 @@ from gaia.agent import AgentClient, AgentError
 from gaia.agent.types import SessionInfo
 from gaia.audio.recorder import ContinuousListener, Recorder
 from gaia.config import Config
+from gaia.controller.backlog import BacklogMixin
 from gaia.controller.briefing import BriefingMixin
 from gaia.controller.career import CareerMixin
 from gaia.controller.commands import CommandsMixin
@@ -57,6 +58,7 @@ class Orchestrator(
     RegistrationMixin,
     InitiativeMixin,
     SchedulerMixin,
+    BacklogMixin,
 ):
 
     def __init__(
@@ -131,6 +133,8 @@ class Orchestrator(
         self._career_task: asyncio.Task[None] | None = None
         self._career_last_attempt = 0.0
         self._scheduler_task: asyncio.Task[None] | None = None
+        # Fila do backlog (card do web): um item por vez, estado no banco.
+        self._backlog_worker = None
         self._retry_plan: dict[str, tuple[float, int]] = {}
         self._proactive_count = 0
         self._proactive_day = datetime.now().astimezone().date()
@@ -222,6 +226,10 @@ class Orchestrator(
         # Briefing, carteira, vagas, memoria e sonho obedecem a agenda da
         # tabela `automations`; quem dispara e o agendador unico.
         self.start_scheduler()
+        # Fila do backlog do painel: um item por vez, estado no banco. Ligar
+        # aqui (e nao no clique) faz um item enfileirado antes do restart
+        # continuar depois dele.
+        self.start_backlog()
 
     def start_briefing(self) -> None:
         """Liga o briefing sem depender do bootstrap do agente."""
@@ -301,6 +309,7 @@ class Orchestrator(
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._briefing_task
             self._briefing_task = None
+        await self.stop_backlog()
         if self._scheduler_task is not None:
             self._scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
