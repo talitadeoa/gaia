@@ -51,6 +51,13 @@ class ToolContext:
     # grava na tabela `automations`, entao sem banco ela nao existe).
     cfg: Any = None
     store: Any = None
+    # Teto de leitura/escrita do filesystem (caminho do escopo). Vazio = sem
+    # teto: quem manda e ``allow_outside_project``. Para um bot, e o que impede
+    # a Donna de ler a pasta da Ada mesmo com `read` liberado.
+    # Fica por ULTIMO de proposito: os chamadores antigos passam posicional
+    # (directory, allow_outside_project, agenda, secondbrain, ...) e inserir
+    # um campo no meio mudaria a posicao de tudo silenciosamente.
+    scope: str = ""
 
     def resolve(self, raw: str) -> Path:
         if not (raw or "").strip():
@@ -70,6 +77,20 @@ class ToolContext:
                     f"acesso negado a {path}: fora de {self.directory} "
                     "(agent.allow_outside_project=false)"
                 ) from exc
+        if self.scope:
+            try:
+                root = Path(self.scope).expanduser().resolve()
+            except OSError:  # pragma: no cover - defensivo
+                root = None
+            if root is not None:
+                try:
+                    path.relative_to(root)
+                except ValueError as exc:
+                    # Nao vaza o caminho absoluto do escopo: o modelo nao
+                    # precisa dele para pedir de novo.
+                    raise ToolError(
+                        f"acesso negado a {path}: fora do escopo deste bot"
+                    ) from exc
         return path
 
     def relative(self, path: Path) -> str:

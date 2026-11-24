@@ -581,3 +581,36 @@ async def test_turno_em_andamento_nao_perde_evento_quando_outro_comeca(
         client.unsubscribe_session(sess_a.id, fila_a)
         client.unsubscribe_session(sess_b.id, fila_b)
         await client.aclose()
+
+
+# ------------------------------------------------------ escopo de filesystem
+def test_scope_recusa_caminho_fora(tmp_path):
+    """O escopo e o teto de leitura/escrita; o diretorio e so o cwd."""
+    workspace = tmp_path / "dissertacao"
+    outra = tmp_path / "outra"
+    workspace.mkdir()
+    outra.mkdir()
+    (outra / "segredo.txt").write_text("x", encoding="utf-8")
+    ctx = ToolContext(workspace, scope=str(workspace))
+
+    with pytest.raises(ToolError, match="escopo"):
+        ctx.resolve(str(outra / "segredo.txt"))
+
+    # Caminho relativo continua nascendo no diretorio, e passa no escopo.
+    dentro = write({"path": "nota.md", "content": "oi"}, ctx)
+    assert dentro.ok and (workspace / "nota.md").is_file()
+
+
+def test_scope_permite_dentro(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("oi", encoding="utf-8")
+    ctx = ToolContext(workspace, scope=str(tmp_path))
+
+    assert read({"path": "a.txt"}, ctx).content == "oi"
+
+
+def test_sem_scope_nao_restringe(tmp_path):
+    """Sem escopo o comportamento antigo continua (allow_outside_project manda)."""
+    ctx = ToolContext(tmp_path, allow_outside_project=True, scope="")
+    assert ctx.resolve("/tmp").is_absolute()
