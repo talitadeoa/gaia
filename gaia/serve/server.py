@@ -39,6 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
+from gaia.control import routines as routines_mod
 from gaia.controller import command_catalog as commands
 from gaia.interface.remote import RemoteUI
 from gaia.serve import control_api, session, web
@@ -911,7 +912,14 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(HTTPStatus.ACCEPTED, {"ok": True, "item": item})
 
     def _mudar_automacao(self, corpo: dict[str, Any]) -> None:
-        """Liga/desliga (ou edita horario de) uma automacao pela tabela."""
+        """Liga/desliga uma automacao (tabela `automations`) ou rotina (`routines`).
+
+        Os ids sao disjuntos (`briefing:*`/`career:*`/`memory:daily`/
+        `memory:dream` vs `initiative:*`/`memory:previous_day`/...), entao o
+        despacho e por lookup no registry. A tela usa a MESMA rota para as duas
+        familias: e o mesmo conceito (o que a Gaia faz sozinha), so com driver
+        diferente (janela de horario vs gate de config/evento).
+        """
         centro = self.app.center
         if centro is None:
             self._erro(
@@ -931,6 +939,10 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         try:
+            if routines_mod.find(automation_id) is not None:
+                atual = centro.update_routine(automation_id, corpo_sem_id)
+                self._json(HTTPStatus.OK, {"ok": True, "routine": atual})
+                return
             self._json(
                 HTTPStatus.OK,
                 {"ok": True, "automation": centro.update_automation(automation_id, corpo_sem_id)},
@@ -946,11 +958,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "automation_failed", str(exc))
 
     def _rodar_automacao(self, corpo: dict[str, Any]) -> None:
-        """Executa a automacao agora e devolve o run registrado.
+        """Executa a automacao (ou rotina) agora e devolve o run registrado.
 
-        404 = id desconhecido, 409 = motor ocupado com um turno, 503 = motor
-        sem Control Center. A espera roda no loop do motor (``run_awaitable``),
-        porque a rotina faz rede e pode levar minutos.
+        404 = id desconhecido (ou rotina sem handler), 409 = motor ocupado com
+        um turno, 503 = motor sem Control Center. A espera roda no loop do motor
+        (``run_awaitable``), porque a rotina faz rede e pode levar minutos.
         """
         centro = self.app.center
         if centro is None:
@@ -964,8 +976,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not automation_id:
             self._erro(HTTPStatus.BAD_REQUEST, "missing_id", "informe id")
             return
+        automacao_rotina = routines_mod.find(automation_id) is not None
         try:
-            resultado = _aguardar(self, centro.run_automation(automation_id))
+            if automacao_rotina:
+                resultado = _aguardar(self, centro.run_routine(automation_id))
+            else:
+                resultado = _aguardar(self, centro.run_automation(automation_id))
         except KeyError:
             self._erro(
                 HTTPStatus.NOT_FOUND,

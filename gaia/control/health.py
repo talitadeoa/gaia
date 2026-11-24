@@ -272,6 +272,25 @@ def scheduler_health(
             "ultima execucao falhou: " + ", ".join(falhas),
             failed=falhas,
         )
+    # Rotinas continuas com problema: e a falha silenciosa que a tela de
+    # automacoes existe para matar (worker morto, ultima execucao manual ruim).
+    from gaia.control.routines import describe_routines
+
+    rotinas_erro = [
+        item["id"]
+        for item in describe_routines(cfg, store, now)
+        if item["status"] == "error"
+    ]
+    if rotinas_erro:
+        return _item(
+            "scheduler",
+            "Agendador",
+            "error",
+            "rotina com problema: " + ", ".join(rotinas_erro),
+            routines=rotinas_erro,
+            missed=perdidas,
+            failed=falhas,
+        )
     ativas = [item["id"] for item in itens if item["enabled"]]
     return _item(
         "scheduler",

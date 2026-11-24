@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -199,6 +200,36 @@ class OrchestratorContract(ABC):
 
     @abstractmethod
     async def discard_dream(self, day: date) -> str | None:
+        ...
+
+    # --- rotinas continuas (mixin proprio, chamado pelos lacos) ---
+    @abstractmethod
+    def _routine_on(
+        self, routine_id: str, overrides: dict[str, bool] | None = None
+    ) -> bool:
+        ...
+
+    @abstractmethod
+    def _routine_overrides(self) -> dict[str, bool]:
+        ...
+
+    @abstractmethod
+    async def _run_routine(
+        self,
+        routine_id: str,
+        handler: Callable[..., Awaitable[Any]],
+        now: datetime,
+        *,
+        overrides: dict[str, bool] | None = None,
+    ) -> None:
+        ...
+
+    @abstractmethod
+    async def _call_routine_handler(self, handler: Any, now: datetime) -> None:
+        ...
+
+    @abstractmethod
+    async def run_routine_now(self, routine_id: str) -> dict[str, Any]:
         ...
 
     # --- metodos que um mixin chama de outro (implementados nos mixins) ---

@@ -19,6 +19,7 @@ from gaia.controller.initiative import InitiativeMixin
 from gaia.controller.memory import MemoryMixin
 from gaia.controller.orchestrator import Orchestrator
 from gaia.controller.registration import RegistrationMixin
+from gaia.controller.routines import RoutineMixin
 from gaia.controller.speech import SpeechMixin
 from gaia.controller.turns import TurnMixin
 from gaia.controller.voice import VoiceMixin
@@ -184,6 +185,7 @@ def test_mixins_share_the_explicit_contract():
         BriefingMixin,
         CareerMixin,
         RegistrationMixin,
+        RoutineMixin,
         InitiativeMixin,
     )
     for mixin in mixins:
@@ -292,6 +294,44 @@ async def test_chines_troca_o_idioma_do_eco(orch):
     await orch._handle_command("/chines fr")
     assert orch.cfg.interface.echo_language == "fr"
     assert orch.ui.called("success")
+
+
+def test_rotina_continua_pausada_no_motor_de_verdade(orch):
+    """O gate roda no Orchestrator real (nao so no stub do mixin)."""
+    assert orch._routine_on("initiative:agenda") is True
+    orch.store.set_routine("initiative:agenda", enabled=False)
+    assert orch._routine_on("initiative:agenda") is False
+    # Os gates de config continuam valendo por cima do checkbox.
+    orch.cfg.agenda.enabled = False
+    orch.store.set_routine("initiative:agenda", enabled=True)
+    assert orch._routine_on("initiative:agenda") is False
+
+
+@pytest.mark.asyncio
+async def test_rodar_rotina_a_mao_no_motor_de_verdade(orch, monkeypatch):
+    """`run_routine_now` grava o run e chama o handler de verdade."""
+    chamadas: list[str] = []
+
+    async def fake_consolidar_anterior():
+        chamadas.append("dia anterior")
+
+    monkeypatch.setattr(orch, "_consolidate_previous_day", fake_consolidar_anterior)
+
+    resultado = await orch.run_routine_now("memory:previous_day")
+
+    assert chamadas == ["dia anterior"]
+    assert resultado["status"] == "completed"
+    assert resultado["trigger"] == "manual"
+    ultima = orch.store.last_run("memory", "memory:previous_day")
+    assert ultima is not None and ultima["trigger"] == "manual"
+    # A rotina aparece no painel com o run manual como ultima execucao.
+    from gaia.control import routines as routines_mod
+
+    item = routines_mod.render(
+        routines_mod.find("memory:previous_day"), orch.cfg, orch.store
+    )
+    assert item["last_run"]["status"] == "completed"
+    assert item["status"] == "active"
 
 
 def test_eco_key_cai_no_chines_quando_a_config_e_estranha(orch):

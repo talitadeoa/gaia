@@ -458,3 +458,27 @@ def test_upsert_e_edicao_de_automacao(tmp_path):
         assert store.update_automation("nao-existe", at="10:00") is False
     finally:
         store.close()
+
+
+def test_schema_v9_tem_a_tabela_routines(tmp_path):
+    """Rotinas continuas: tabela de override (linha ausente = ligada)."""
+    store = MemoryStore(tmp_path / "gaia.db")
+    try:
+        assert store.schema_version() >= 9
+        assert store.list_routines() == []
+        # Sem linha = ligada (o registry e o padrao; a tabela so guarda excecao).
+        assert store.routine_enabled("initiative:agenda") is True
+
+        store.set_routine("initiative:agenda", enabled=False)
+        assert store.routine_enabled("initiative:agenda") is False
+        linha = store.get_routine("initiative:agenda")
+        assert linha is not None and linha["enabled"] == 0
+
+        # Idempotente: pausar duas vezes nao duplica nem re-cria.
+        store.set_routine("initiative:agenda", enabled=False)
+        assert len(store.list_routines()) == 1
+
+        store.set_routine("initiative:agenda", enabled=True)
+        assert store.routine_enabled("initiative:agenda") is True
+    finally:
+        store.close()

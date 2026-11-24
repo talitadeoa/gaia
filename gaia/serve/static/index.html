@@ -93,6 +93,10 @@
   .auto-card .check input { accent-color: var(--accent); }
   .auto-card button.rodar-agora { font-size: 11px; padding: 2px 10px; margin-left: auto; }
   .auto-card button.rodar-agora:disabled { opacity: .6; cursor: progress; }
+  /* Rotinas continuas: mesma lista, agrupada embaixo das automacoes. */
+  #auto-rotinas { display: flex; flex-direction: column; gap: 10px; }
+  #auto-rotinas > h3 { font-size: 12px; margin: 6px 0 0; color: var(--dim);
+                       text-transform: uppercase; letter-spacing: .06em; }
   .ligado { color: var(--accent); }
   main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: 0; }
   @media (max-width: 820px) { main { grid-template-columns: 1fr; } aside { display: none; } }
@@ -350,6 +354,9 @@
   </header>
   <div id="auto-proativo" class="auto-card"></div>
   <div id="auto-lista"></div>
+  <!-- Rotinas continuas: sem horario declarado (boot/laco/evento/varredura).
+       Mesmo cartao das automacoes; o gatilho vem do servidor. -->
+  <div id="auto-rotinas"></div>
 </section>
 
 <!-- Tela propria do backlog (botao "backlog" do header). Como a de
@@ -489,6 +496,10 @@ const estado = {
   },
   textoFinal: "",     // ultimo texto que a Gaia escreveu no turno
   automacoesProativo: null, // bloco `proactive` de `GET /automations`
+  // Rotinas continuas (boot/laco/evento/varredura): mesma tela, outra familia.
+  // O gatilho vem do servidor (`trigger_label`); a tela nao traduz codigo.
+  rotinas: [],
+  rotinasResumo: null,
   // Backlog: o card do aside nasce RECOLHIDO (so a contagem no cabecalho) e
   // abre ao clique; a tela `#backlog` e o corpo inteiro, sempre aberto. O
   // estado sobrevive ao redesenho do SSE.
@@ -761,6 +772,9 @@ const AUTO_STATUS = {
   missed: ["não rodou", "err"],
   disabled: ["desligada", ""],
   paused: ["pausada", "warn"],
+  // Rotinas continuas: nao existe "perdeu a hora" (nao ha janela).
+  active: ["ativa", "ok"],
+  error: ["com erro", "err"],
 };
 
 /** "hh:mm" quando foi hoje, "dd/mm hh:mm" nos outros dias. */
@@ -945,10 +959,14 @@ async function agendaAutomacoes() {
   try {
     const dados = await api("/automations");
     estado.automacoesProativo = dados && dados.proactive ? dados.proactive : null;
+    estado.rotinas = dados && Array.isArray(dados.routines) ? dados.routines : [];
+    estado.rotinasResumo = dados && dados.routines_summary ? dados.routines_summary : null;
     return Array.isArray(dados.automations) ? dados.automations : [];
   } catch (erro) {
     if (erro.status === 401) tratar401(erro);
     estado.automacoesProativo = null;
+    estado.rotinas = [];
+    estado.rotinasResumo = null;
     return null;
   }
 }
@@ -1000,6 +1018,52 @@ function linhaAutomacao(item) {
   );
 }
 
+/**
+ * Uma rotina continua (boot/laco/evento/varredura). Mesmo cartao da automacao,
+ * com tres diferencas: o "quando" e o gatilho (nao uma janela), o "rodar agora"
+ * so existe quando o servidor diz `runnable` (as 3 sem handler nao aparecem com
+ * botao) e o motivo (`reason`) explica pausa no painel vs. config desligada vs.
+ * worker parado.
+ */
+function linhaRotina(item) {
+  const ultima = item.last_run || null;
+  const meta = [
+    item.trigger_label || item.trigger || "",
+    item.skill || "",
+  ].filter(Boolean).join(" · ");
+  const falhou = Boolean(ultima && ultima.status === "failed");
+  // O checkbox e a decisao da pessoa (`paused`); `enabled` pode continuar
+  // falso porque o gate de config esta desligado — e o `reason` explica.
+  const ligada = !item.paused;
+  return window.Gaia.el("div", { class: "auto-card" + (falhou ? " falhou" : "") },
+    window.Gaia.el("div", { class: "topo" },
+      window.Gaia.el("span", { class: "nome" }, item.name || item.id),
+      window.Gaia.el("label", { class: "check", title: "ativar/desativar esta rotina" },
+        window.Gaia.el("input", {
+          type: "checkbox",
+          ...(ligada ? { checked: "checked" } : {}),
+          onchange: (evento) => alternarRotina(item, evento.target),
+        }),
+        window.Gaia.el("span", { class: ligada ? "ligado" : "" },
+          ligada ? "ativa" : "desativada")),
+      autoTag(item.status),
+      item.runnable
+        ? window.Gaia.el("button", {
+            class: "pill rodar-agora",
+            type: "button",
+            title: "executar esta rotina agora, sem esperar o proximo ciclo",
+            onclick: (evento) => rodarRotina(item, evento.currentTarget),
+          }, "rodar agora")
+        : null),
+    window.Gaia.el("div", { class: "linha-meta" }, meta),
+    item.description ? window.Gaia.el("div", { class: "dica" }, item.description) : null,
+    item.reason ? window.Gaia.el("div", { class: "erro" }, item.reason) : null,
+    ultima ? window.Gaia.el("div",
+      { class: "ultima " + (falhou ? "falhou" : (ultima.status === "completed" ? "ok" : "")) },
+      "última (manual): " + ultimaEmTexto(ultima)) : null,
+  );
+}
+
 /** Card da proatividade: um checkbox e o que ela cobre. */
 function cardProativo(proativo) {
   const ligado = Boolean(proativo && proativo.enabled);
@@ -1032,13 +1096,19 @@ async function carregarTelaAutomacoes() {
     $("#auto-proativo").replaceChildren();
     $("#auto-lista").replaceChildren(window.Gaia.el("p", { class: "dica" },
       "este motor não expõe a agenda: configure GAIA_CONTROL_TOKEN no servidor."));
+    $("#auto-rotinas").replaceChildren();
     return;
   }
   const ligadas = lista.filter((item) => item.enabled).length;
   const atrasadas = lista.filter((item) => item.status === "missed").length;
   const falhas = lista.filter((item) => (item.last_run || {}).status === "failed").length;
+  const rotinas = estado.rotinas || [];
+  const resumoRotinas = estado.rotinasResumo || { active: 0, total: rotinas.length };
   $("#auto-resumo").textContent = [
-    ligadas + "/" + lista.length + " ligadas",
+    ligadas + "/" + lista.length + " agendadas",
+    rotinas.length
+      ? resumoRotinas.active + "/" + resumoRotinas.total + " rotinas ativas"
+      : "",
     atrasadas ? atrasadas + " não rodaram" : "",
     falhas ? falhas + " falharam" : "",
   ].filter(Boolean).join(" · ");
@@ -1050,6 +1120,14 @@ async function carregarTelaAutomacoes() {
     ...(lista.length
       ? lista.map(linhaAutomacao)
       : [window.Gaia.el("p", { class: "dica" }, "nenhuma automação registrada.")]),
+  );
+  $("#auto-rotinas").replaceChildren(
+    ...(rotinas.length
+      ? [
+          window.Gaia.el("h3", {}, "Rotinas contínuas"),
+          ...rotinas.map(linhaRotina),
+        ]
+      : []),
   );
 }
 
@@ -1112,6 +1190,69 @@ async function rodarAutomacao(item, botao) {
     botao.textContent = rotulo;
     await carregarTelaAutomacoes();
     carregarAutomacoes();
+  }
+}
+
+/**
+ * Pausa/retoma uma rotina continua (tabela `routines`).
+ *
+ * O laco dono le a tabela no proximo ciclo: nao ha nada para reiniciar aqui. A
+ * mesma rota das automacoes (`/automations/set`); o servidor despacha pelo id.
+ */
+async function alternarRotina(item, caixa) {
+  caixa.disabled = true;
+  try {
+    await api("/automations/set", {
+      method: "POST",
+      body: JSON.stringify({ id: item.id, enabled: caixa.checked }),
+    });
+    await carregarTelaAutomacoes();
+  } catch (erro) {
+    caixa.checked = !caixa.checked; // desfaz na tela: o servidor recusou
+    if (erro.status === 401) tratar401(erro);
+    aviso("error", "não foi possível mudar a rotina: " + texto(erro.message));
+  } finally {
+    caixa.disabled = false;
+  }
+}
+
+/**
+ * Executa a rotina de verdade agora (`trigger=manual`).
+ *
+ * Vale mesmo com a rotina desativada: o clique e explicito. Pode falar no canal
+ * em uso (`_say_proactive`), por isso a confirmacao antes.
+ */
+async function rodarRotina(item, botao) {
+  const ok = window.confirm(
+    'Rodar "' + (item.name || item.id) + '" agora?'
+    + "\n\nIsso executa de verdade e pode enviar mensagem no canal.",
+  );
+  if (!ok) return;
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "rodando…";
+  try {
+    const dados = await api("/automations/run", {
+      method: "POST",
+      body: JSON.stringify({ id: item.id }),
+    });
+    const run = (dados && dados.run) || {};
+    aviso(
+      run.status === "completed" ? "success" : "error",
+      (item.name || item.id) + ": " + (run.status || "sem resultado")
+      + (run.detail ? " — " + run.detail : "")
+      + (run.error ? " — " + run.error : ""),
+    );
+  } catch (erro) {
+    if (erro.status === 401) tratar401(erro);
+    const motivo = erro.status === 409
+      ? "o motor está num turno; tente quando ele terminar"
+      : texto(erro.message);
+    aviso("error", "não foi possível rodar " + (item.name || item.id) + ": " + motivo);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = rotulo;
+    await carregarTelaAutomacoes();
   }
 }
 

@@ -386,30 +386,42 @@ class TelegramService:
     # ------------------------------------------------------------ audiobooks
     async def _audiobook_watcher(self) -> None:
         """audiobook.watch_minutes > 0: confere a pasta sozinho de tempos em tempos."""
-        from gaia.audiobook.service import process_inbox
-
         cfg = self.cfg.audiobook
         interval = max(1.0, cfg.watch_minutes) * 60
-        inbox = self.cfg.audiobook_inbox()
-        outbox = self.cfg.audiobook_outbox()
-        tmp_dir = cfg.tmp_path(self.cfg.resolved_data_dir())
         while True:
             await asyncio.sleep(interval)
             try:
-                result = await process_inbox(cfg, inbox, outbox, tmp_dir, self.logger)
+                await self._audiobook_scan_once()
             except Exception:
                 self.logger.exception("varredura de audiobooks falhou")
-                continue
-            chat_id = self.cfg.telegram.allowed_chat_id or self._chat_id
-            if result.empty or not cfg.notify or not chat_id:
-                continue
-            try:
-                await self.client.send_message(
-                    "📚 audiobooks prontos em " + str(outbox) + "\n" + result.summary(),
-                    chat_id=chat_id,
-                )
-            except TelegramError as exc:
-                self.logger.debug("aviso de audiobook falhou: %s", exc)
+
+    async def _audiobook_scan_once(self) -> None:
+        """Uma varredura: gate do painel, processa a inbox e avisa no chat.
+
+        Separado do laco para o gate ser testavel sem ``sleep``. A rotina
+        ``audiobook:watch`` pausada no painel nao varre nem avisa.
+        """
+        from gaia.audiobook.service import process_inbox
+        from gaia.control import routines as routines_mod
+
+        cfg = self.cfg.audiobook
+        store = getattr(self.orchestrator, "store", None)
+        if not routines_mod.is_enabled(store, "audiobook:watch"):
+            return
+        inbox = self.cfg.audiobook_inbox()
+        outbox = self.cfg.audiobook_outbox()
+        tmp_dir = cfg.tmp_path(self.cfg.resolved_data_dir())
+        result = await process_inbox(cfg, inbox, outbox, tmp_dir, self.logger)
+        chat_id = self.cfg.telegram.allowed_chat_id or self._chat_id
+        if result.empty or not cfg.notify or not chat_id:
+            return
+        try:
+            await self.client.send_message(
+                "📚 audiobooks prontos em " + str(outbox) + "\n" + result.summary(),
+                chat_id=chat_id,
+            )
+        except TelegramError as exc:
+            self.logger.debug("aviso de audiobook falhou: %s", exc)
 
     async def _handle_document(self, document: dict[str, Any], caption: str, chat_id: Any) -> None:
         """PDF/TXT enviado no chat: salva na pasta de entrada e narra."""

@@ -64,8 +64,9 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 | `gaia/interface/terminal.py` | UI Rich; `textual_app.py` | TUI |
 | `gaia/interface/remote.py` | `RemoteUI`: serializa eventos para o serve (fan-out + histórico) |
 | `gaia/serve/server.py` | HTTP + SSE + `/control`; `app.py` | ponte `OrchestratorTarget`; `voice.py` | modo voz do web (microfone/STT do motor + audio do TTS); `control_api.py` | rotas do painel; `session.py` | nonces de cookie (chat e painel); `instances.py` | `instances.json` e sonda `/health`; `web.py`/`static/` | web (`shared.js` e comum as duas telas) |
-| `gaia/control/` | Control Center: `runs` (histórico), `skills`, `automations` (agenda + seed/load/retry), `health`, `secrets`, `settings`, `providers`, `center` |
+| `gaia/control/` | Control Center: `runs` (histórico), `skills`, `automations` (agenda + seed/load/retry), `routines` (rotinas contínuas: boot/laço/evento/varredura), `health`, `secrets`, `settings`, `providers`, `center` |
 | `gaia/controller/scheduler.py` | agendador único: lê `automations`, calcula `due()`, chama o handler da skill, faz retry e notifica falha |
+| `gaia/controller/routines.py` | gate único (`_routine_on`) e "rodar agora" das rotinas contínuas; os laços dos mixins chamam por aqui |
 | `gaia/client/remote_client.py` | cliente `gaia --remote` |
 | `gaia/telegram/`, `whatsapp/`, `browser/` | canais e integrações |
 | `gaia/audiobook/` | PDF/texto → MP3: `extract.py` (PDF sem dependência), `normalize.py` (limpeza + capítulos), `jobs.py` (narração, ID3/CHAP), `service.py` (lote inbox→outbox) |
@@ -268,6 +269,24 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   (`install`, `status`, `logs`, `--dry-run`). Teste sem SSH nem rede em
   `tests/test_gmin_deploy.py` (repo bare em `tmp_path`, stubs de `systemctl` e
   do `python` do venv).
+- **Nova rotina contínua:** rotina é o que roda **sem horário declarado** — boot,
+  laço, evento ou varredura. São três passos, e só três:
+  1. o `Routine(...)` em `gaia/control/routines.py` (id namespaced, `trigger`,
+     `requires` com caminhos de config, `module`, `worker` e `runnable`);
+  2. o `id -> método` em `gaia/controller/routines.py::_ROUTINE_HANDLERS` **só**
+     se ela puder rodar à mão (o resto não aparece com botão na tela);
+  3. a chamada no laço dono passa por `_run_routine("id", handler, now)` (e o
+     boot por `_routine_on("id")`). **Nunca** um `if` solto no laço: o gate tem
+     de ser um só, senão a rotina nasce sem checkbox no painel.
+  A pausa mora na tabela `routines` (schema v9) como **override**: linha ausente
+  = ligada, então não existe seed nem sincronização com o registry (ao contrário
+  de `automations`, onde a tabela guarda a agenda inteira). Disparo automático
+  **não** grava `runs` (o laço roda a cada 30 s); só `trigger=manual` grava. A
+  tela é a MESMA de automações (`#automacoes`; `/automations/set` e
+  `/automations/run` com despacho por id no `server.py`). Testes:
+  `tests/test_control_routines.py` (registry/render), `tests/test_routines_gate.py`
+  (gate e rodar à mão), `tests/test_control_api.py` (rotas) e
+  `tests/test_serve_web.py` (tela).
 - **Nova automação:** `controller/briefing.py` (janelas `*_at`/`*_until`) ou
   `controller/initiative.py` (lembretes/check-in); use `claim_meta` para
   garantir "uma vez por dia". Ex.: `_check_estudos` (cobra estudo atrasado).
@@ -303,6 +322,14 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   tokens) — trate como pendência de segurança.
 - **`always` de permissão** hoje é global ao processo, não à sessão (pendência
   registrada em `docs/prompt-correcoes.md`).
+- **Rotina com gate duplicado escapa do painel.** Se o laço fizer
+  `if self.cfg.x.enabled:` antes de chamar a rotina, o checkbox do painel não tem
+  efeito nenhum (o `if` ganha primeiro). O gate de config mora em
+  `Routine.requires`; no laço só pode existir `_run_routine`/`_routine_on`.
+- **Rotina não grava `run` a cada ciclo.** `_memory_loop` e `_proactive_loop`
+  rodam a cada 30-60 s: registrar todo ciclo encheria a tabela `runs` e o Error
+  Center passaria a mostrar falha de rotina que só não tinha nada a fazer. Só
+  `trigger=manual` (o "rodar agora" da tela) registra.
 - **`bash` herda o `.env` inteiro** hoje; não use a ferramenta para inspecionar
   ambiente/segredos até isso ser filtrado (pendência).
 - **`rsync` nunca copia `.git`.** O mini já foi atualizado por `rsync` e por

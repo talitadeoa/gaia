@@ -241,11 +241,13 @@ class MemoryMixin(OrchestratorContract):
 
     async def _memory_loop(self) -> None:
         try:
-            await self._consolidate_previous_day()
+            if self._routine_on("memory:previous_day"):
+                await self._consolidate_previous_day()
         except Exception as exc:  # pragma: no cover - depende do provedor
             self.logger.warning("consolidação do dia anterior falhou: %s", exc)
         try:
-            await self._dream_catch_up()
+            if self._routine_on("memory:dream_catch_up"):
+                await self._dream_catch_up()
         except Exception as exc:  # pragma: no cover - depende do provedor
             self.logger.warning("sonho atrasado falhou: %s", exc)
         while True:
@@ -258,7 +260,9 @@ class MemoryMixin(OrchestratorContract):
                 now = datetime.now().astimezone()
                 # Consolidacao, sonho e briefings saem pelo agendador unico;
                 # aqui so o aviso do sonho (sem horario declarado na tabela).
-                await self._maybe_dream_report(now)
+                await self._run_routine(
+                    "memory:dream_report", self._maybe_dream_report, now
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pragma: no cover - depende do provedor

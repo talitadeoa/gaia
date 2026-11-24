@@ -82,6 +82,10 @@ class BacklogMixin(OrchestratorContract):
         self, status: str, item: dict[str, Any], resultado: BacklogResult
     ) -> None:
         """Avisa quando o PR fica pronto (ou quando o item falha)."""
+        # Rotina `backlog:notify` pausada no painel: o worker nunca avisa.
+        if not self._routine_on("backlog:notify"):
+            logger.debug("backlog: aviso desligado no painel")
+            return
         titulo = str(item.get("title") or "item do backlog")
         projeto = str(item.get("project") or "backlog")
         if resultado.ok:

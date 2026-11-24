@@ -449,6 +449,32 @@
         ),
       ),
     );
+    const rotinas = dados.routines || [];
+    if (rotinas.length) {
+      alvo.append(
+        el("div", { class: "panel" },
+          el("header", {}, el("h2", {}, "Rotinas contínuas"),
+            el("span", { class: "dim" }, "boot · laço · evento · varredura")),
+          el("div", { class: "panel-body" },
+            el("table", {},
+              el("thead", {}, el("tr", {},
+                el("th", {}, "rotina"), el("th", {}, "gatilho"), el("th", {}, "status"),
+                el("th", {}, "motivo"), el("th", {}, "última (manual)"))),
+              el("tbody", {}, rotinas.map((r) =>
+                el("tr", {},
+                  el("td", {}, r.name, el("div", { class: "mono dim" }, r.id)),
+                  el("td", { class: "dim" }, r.trigger_label || r.trigger),
+                  el("td", {}, tag(r.status, classeStatus(r.status))),
+                  el("td", { class: "dim" }, r.reason || r.description || "—"),
+                  el("td", { class: "dim" }, r.last_run
+                    ? `${r.last_run.status} · ${data(r.last_run.started_at)}`
+                    : "nunca"),
+                ))),
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   /* ---------------------------------------------------------------- activity */

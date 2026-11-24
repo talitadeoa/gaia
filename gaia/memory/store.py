@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 # Versao atual do schema. Incremente ao adicionar novas migracoes em _migrate.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # v5: conversas separadas por canal (cli, telegram, whatsapp).
 DEFAULT_CHANNEL = "cli"
@@ -175,6 +175,16 @@ class MemoryStore:
                     ON backlog_items(source, page_id, fingerprint);
                 CREATE INDEX IF NOT EXISTS idx_backlog_finished
                     ON backlog_items(status, finished_at);
+
+                -- v9: rotinas continuas (boot/laco/evento/varredura). Diferente
+                -- de `automations`, aqui NAO ha agenda: a tabela e so o override
+                -- da decisao da pessoa (`enabled`). Linha ausente = ligada, entao
+                -- nao existe seed nem sincronizacao com o registry.
+                CREATE TABLE IF NOT EXISTS routines (
+                    id TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._migrate()
@@ -844,6 +854,41 @@ class MemoryStore:
                 valores,
             )
             return cursor.rowcount > 0
+
+    # ---------------------------------------------------------------- routines
+    def list_routines(self) -> list[dict[str, Any]]:
+        """Overrides de rotina continua, em ordem estavel de ``id``."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM routines ORDER BY id ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_routine(self, routine_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM routines WHERE id = ?", (routine_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def routine_enabled(self, routine_id: str) -> bool:
+        """Ligada? Sem linha o padrao e ligada (a tabela so guarda excecao)."""
+        linha = self.get_routine(routine_id)
+        return True if linha is None else bool(linha["enabled"])
+
+    def set_routine(self, routine_id: str, *, enabled: bool) -> None:
+        """Grava a decisao da pessoa (upsert: uma linha por rotina)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO routines (id, enabled, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    updated_at = excluded.updated_at
+                """,
+                (routine_id, int(bool(enabled)), _now()),
+            )
 
     def backlog_ready(self) -> bool:
         """A tabela do backlog existe? (banco migrado para o schema v8)"""

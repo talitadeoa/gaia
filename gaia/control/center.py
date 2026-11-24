@@ -20,6 +20,7 @@ from gaia.config import Config
 from gaia.control import automations as automations_mod
 from gaia.control import health as health_mod
 from gaia.control import providers as providers_mod
+from gaia.control import routines as routines_mod
 from gaia.control import runs as runs_mod
 from gaia.control import secrets as secrets_mod
 from gaia.control import settings as settings_mod
@@ -129,15 +130,23 @@ class ControlCenter:
         return {"skills": skills_mod.describe_skills(self.cfg, self.store)}
 
     def automations(self) -> dict[str, Any]:
-        """Agenda + estado da proatividade (a tela mostra as duas coisas).
+        """Agenda + rotinas continuas + estado da proatividade.
 
-        ``proactive`` vai junto porque a tela de automacoes tem um checkbox so
-        para ela e nao pode pagar uma rota extra por isso. O bloco e aditivo:
-        quem le ``automations`` continua igual.
+        `routines` e aditivo: a tela de automacoes mostra as duas familias e
+        nao paga uma rota extra por isso. `workers` vem do mesmo `_tasks()` que
+        o health usa — rotina com worker morto aparece como `error` em vez de
+        mentir "ativa".
         """
         cfg = self.cfg.proactive
+        workers = self._tasks() or None
         return {
             "automations": automations_mod.describe_automations(self.cfg, self.store),
+            "routines": routines_mod.describe_routines(
+                self.cfg, self.store, workers=workers
+            ),
+            "routines_summary": routines_mod.summarize(
+                self.cfg, self.store, workers=workers
+            ),
             "proactive": {
                 "enabled": bool(cfg.enabled),
                 "reminders": bool(cfg.reminders),
@@ -264,6 +273,36 @@ class ControlCenter:
         if not callable(executar):
             raise RuntimeError("este motor nao executa automacao sob demanda")
         return dict(await executar(automation_id))
+
+    def update_routine(
+        self, routine_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Pausa/retoma uma rotina continua (tabela `routines`, schema v9).
+
+        ``KeyError`` = id desconhecido (404), ``ValueError`` = payload invalido
+        (422). Nao aceita horario: rotina nao tem janela.
+        """
+        if self.store is None:
+            raise RuntimeError("motor sem banco: rotinas indisponiveis")
+        return routines_mod.update(
+            self.store, self.cfg, routine_id, payload, workers=self._tasks() or None
+        )
+
+    async def run_routine(self, routine_id: str) -> dict[str, Any]:
+        """Executa a rotina agora (``trigger=manual``) e devolve o run.
+
+        ``KeyError`` = id desconhecido ou rotina sem handler (404 antes de
+        tocar o motor, para o transporte nao devolver 409 de "ocupado" para um
+        pedido que nunca vai existir), ``RuntimeError`` = motor ocupado ou
+        motor sem o metodo (409).
+        """
+        item = routines_mod.find(routine_id)
+        if item is None or not item.runnable:
+            raise KeyError(routine_id)
+        executar = getattr(self.orch, "run_routine_now", None)
+        if not callable(executar):
+            raise RuntimeError("este motor nao executa rotina sob demanda")
+        return dict(await executar(routine_id))
 
     async def set_proactive(self, enabled: bool) -> dict[str, Any]:
         """Liga/desliga a iniciativa proativa (TOML + processo).

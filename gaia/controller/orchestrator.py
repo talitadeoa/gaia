@@ -30,6 +30,7 @@ from gaia.controller.initiative import InitiativeMixin
 from gaia.controller.memory import MemoryMixin
 from gaia.controller.modes import PERSONAS, Persona, get_persona, resolve_mode
 from gaia.controller.registration import RegistrationMixin
+from gaia.controller.routines import RoutineMixin
 from gaia.controller.scheduler import SchedulerMixin
 from gaia.controller.speech import SpeechMixin
 from gaia.controller.turns import TurnMixin
@@ -56,6 +57,7 @@ class Orchestrator(
     BriefingMixin,
     CareerMixin,
     RegistrationMixin,
+    RoutineMixin,
     InitiativeMixin,
     SchedulerMixin,
     BacklogMixin,
@@ -454,20 +456,24 @@ class Orchestrator(
                 self.logger.warning("painel de metas: %s", exc, exc_info=True)
 
         if self.cfg.proactive.enabled and self.cfg.proactive.startup_greeting:
-            try:
-                await self._startup_greeting()
-            except Exception as exc:  # pragma: no cover
-                self.logger.warning("falha na saudação inicial: %s", exc, exc_info=True)
+            if self._routine_on("initiative:greeting"):
+                try:
+                    await self._startup_greeting()
+                except Exception as exc:  # pragma: no cover
+                    self.logger.warning(
+                        "falha na saudação inicial: %s", exc, exc_info=True
+                    )
 
         if self.cfg.proactive.enabled:
             self._proactive_task = asyncio.create_task(self._proactive_loop(greet=False))
 
         self._start_background_workers()
 
-        try:
-            await self._check_focus(datetime.now().astimezone())
-        except Exception as exc:  # pragma: no cover
-            self.logger.warning("falha ao checar foco: %s", exc, exc_info=True)
+        if self._routine_on("initiative:focus"):
+            try:
+                await self._check_focus(datetime.now().astimezone())
+            except Exception as exc:  # pragma: no cover
+                self.logger.warning("falha ao checar foco: %s", exc, exc_info=True)
 
     async def start(self) -> None:
         await self.start_services()

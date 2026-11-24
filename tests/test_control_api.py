@@ -575,6 +575,72 @@ def test_pausar_automacao_pelo_chat(setup):
     assert carreira["paused"] is True
 
 
+def test_automations_traz_as_rotinas_continuas(setup):
+    base, *_ = setup
+    status, corpo = pedir(base, "GET", "/automations", token="tok-chat")
+    assert status == 200
+    rotinas = corpo["routines"]
+    assert len(rotinas) == 12
+    agenda = next(r for r in rotinas if r["id"] == "initiative:agenda")
+    assert agenda["kind"] == "routine"
+    assert agenda["trigger"] == "loop"
+    assert agenda["trigger_label"] == "a cada ciclo"
+    assert agenda["enabled"] is True
+    assert agenda["runnable"] is True
+    # Sem motor ligado no teste, o worker nao e avaliado: a rotina nao pode
+    # aparecer como erro so porque o ControlCenter nao tem `orch`.
+    assert agenda["status"] in {"active", "paused", "disabled"}
+    # O resumo do cabecalho conta as duas familias.
+    assert corpo["routines_summary"]["total"] == 12
+
+
+def test_pausar_rotina_pelo_chat(setup):
+    base, _, store, _ = setup
+    status, corpo = pedir(
+        base,
+        "POST",
+        "/automations/set",
+        token="tok-chat",
+        corpo={"id": "initiative:agenda", "enabled": False},
+    )
+    assert status == 200
+    assert corpo["routine"]["paused"] is True
+    assert store.routine_enabled("initiative:agenda") is False
+
+    _, corpo = pedir(base, "GET", "/automations", token="tok-chat")
+    agenda = next(r for r in corpo["routines"] if r["id"] == "initiative:agenda")
+    assert agenda["status"] == "paused"
+    # A automacao de verdade continua no lugar dela (ids disjuntos).
+    assert any(a["id"] == "career:weekly" for a in corpo["automations"])
+
+
+def test_rotina_aceita_so_enabled(setup):
+    """Rotina nao tem horario: `at`/`days` sao 422, nao silencio."""
+    base, *_ = setup
+    status, corpo = pedir(
+        base,
+        "POST",
+        "/automations/set",
+        token="tok-chat",
+        corpo={"id": "initiative:agenda", "at": "09:00"},
+    )
+    assert status == 422
+    assert "enabled" in corpo["message"]
+
+
+def test_rodar_rotina_sem_handler_e_404(setup):
+    base, *_ = setup
+    status, corpo = pedir(
+        base,
+        "POST",
+        "/automations/run",
+        token="tok-chat",
+        corpo={"id": "initiative:idle"},
+    )
+    assert status == 404
+    assert corpo["error"] == "unknown_automation"
+
+
 def test_automacao_desconhecida_404(setup):
     base, *_ = setup
     status, corpo = pedir(

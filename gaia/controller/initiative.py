@@ -112,21 +112,55 @@ class InitiativeMixin(OrchestratorContract):
             if in_quiet_hours(now, cfg.quiet_hours):
                 continue
             try:
-                if cfg.reminders:
-                    await self._fire_due_reminders()
-                await self._check_agenda(now)
-                await self._check_estudos(now)
-                await self._check_task_page(now)
-                await self._check_focus(now)
-                if cfg.idle_checkin:
-                    idle_for = (time.monotonic() - self._last_activity) / 60.0
-                    if idle_for >= cfg.idle_minutes and self._can_idle_checkin(now):
-                        await self._say_proactive(await self._generate_initiative_message())
-                        self._last_activity = time.monotonic()
+                await self._proactive_tick(now)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pragma: no cover
                 self.logger.warning("falha na rotina proativa: %s", exc, exc_info=True)
+
+    async def _proactive_tick(self, now: datetime) -> None:
+        """Um ciclo da iniciativa: cada rotina passa pelo gate do painel.
+
+        Separado do laco para o gate ser testavel sem ``sleep`` e para a tela
+        listar exatamente o que roda aqui. A leitura da tabela ``routines`` e
+        uma so por ciclo (``_routine_overrides``), nao uma por rotina.
+        """
+        cfg = self.cfg.proactive
+        overrides = self._routine_overrides()
+        if cfg.reminders:
+            await self._run_routine(
+                "initiative:reminders",
+                self._fire_due_reminders,
+                now,
+                overrides=overrides,
+            )
+        await self._run_routine(
+            "initiative:agenda", self._check_agenda, now, overrides=overrides
+        )
+        await self._run_routine(
+            "initiative:estudos", self._check_estudos, now, overrides=overrides
+        )
+        await self._run_routine(
+            "initiative:tasks", self._check_task_page, now, overrides=overrides
+        )
+        await self._run_routine(
+            "initiative:focus", self._check_focus, now, overrides=overrides
+        )
+        if cfg.idle_checkin:
+            await self._run_routine(
+                "initiative:idle",
+                self._idle_checkin,
+                now,
+                overrides=overrides,
+            )
+
+    async def _idle_checkin(self, now: datetime) -> None:
+        """Check-in de ociosidade (o corpo que vivia inline no laco)."""
+        cfg = self.cfg.proactive
+        idle_for = (time.monotonic() - self._last_activity) / 60.0
+        if idle_for >= cfg.idle_minutes and self._can_idle_checkin(now):
+            await self._say_proactive(await self._generate_initiative_message())
+            self._last_activity = time.monotonic()
 
     async def _check_agenda(self, now: datetime) -> None:
         cfg = self.cfg.agenda

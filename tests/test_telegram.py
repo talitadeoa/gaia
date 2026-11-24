@@ -785,3 +785,55 @@ async def test_pensando_liga_o_raciocinio_no_chat_e_usa_answer_stream():
     await service._handle_update({"message": {"chat": {"id": 42}, "text": "/pensando off"}})
     assert cfg.telegram.show_reasoning is False
     assert any("raciocínio desligado" in text for text in tg.sent)
+
+
+# ------------------------------------------------ rotina audiobook:watch -----
+# A varredura da pasta de audiobooks e a rotina continua que NAO vive no
+# Orchestrator (mora no servico do Telegram). O gate da tabela `routines`
+# precisa ser respeitado aqui tambem, senao o checkbox do painel nao faz nada.
+
+
+class _WatchOrchestrator:
+    """So o que `_audiobook_scan_once` le: o store (gate) e nada mais."""
+
+    def __init__(self, store) -> None:
+        self.store = store
+
+
+@pytest.mark.asyncio
+async def test_varredura_de_audiobook_respeita_a_pausa(tmp_path, monkeypatch):
+    import logging
+
+    from gaia.audiobook.service import BatchResult
+    from gaia.memory.store import MemoryStore
+
+    chamadas: list[str] = []
+
+    async def fake_process(*args, **kwargs):
+        chamadas.append("varreu")
+        return BatchResult()
+
+    monkeypatch.setattr("gaia.audiobook.service.process_inbox", fake_process)
+
+    store = MemoryStore(tmp_path / "gaia.db")
+    cfg = Config()
+    cfg.audiobook.inbox = str(tmp_path / "inbox")
+    cfg.audiobook.outbox = str(tmp_path / "outbox")
+    service = TelegramService(
+        cfg,
+        _WatchOrchestrator(store),
+        _FakeTelegramClient(),
+        None,
+        TerminalUI(quiet=True),
+        logging.getLogger("t"),
+    )
+    try:
+        store.set_routine("audiobook:watch", enabled=False)
+        await service._audiobook_scan_once()
+        assert chamadas == []
+
+        store.set_routine("audiobook:watch", enabled=True)
+        await service._audiobook_scan_once()
+        assert chamadas == ["varreu"]
+    finally:
+        store.close()

@@ -108,6 +108,37 @@ def test_tela_de_automacoes_no_html():
     assert '"deu certo"' in texto and '"não rodou"' in texto
 
 
+def test_rotinas_continuas_na_tela_de_automacoes():
+    """A mesma tela mostra as duas familias: automacao (janela) e rotina (gatilho).
+
+    O contrato: a secao existe, cada rotina tem checkbox (ativar/desativar) e,
+    quando `runnable`, o "rodar agora"; e as duas familias escrevem pelas MESMAS
+    rotas do motor (`/automations/set` e `/automations/run`).
+    """
+    texto, coletor = _html()
+    assert 'id="auto-rotinas"' in texto
+    assert "auto-rotinas" in coletor.ids
+    # Uma linha por rotina, com o gatilho vindo do servidor (nao do JS).
+    assert "function linhaRotina(item)" in texto
+    assert "trigger_label" in texto
+    # Checkbox de ativar/desativar para TODAS as rotinas.
+    assert "onchange: (evento) => alternarRotina(item, evento.target)" in texto
+    # "rodar agora" so nas que tem handler.
+    assert "item.runnable" in texto
+    assert "onclick: (evento) => rodarRotina(item, evento.currentTarget)" in texto
+    # Mesmas rotas: rotina e automacao compartilham a escrita.
+    assert 'api("/automations/set"' in texto
+    assert 'api("/automations/run"' in texto
+    # Status novos existem no mapa da tela (sem "undefined" na etiqueta).
+    for estado in ("active", "paused", "disabled", "error"):
+        assert estado in texto
+    # O motivo do servidor aparece (config desligada / worker parado).
+    assert "item.reason" in texto
+    # O resumo do cabecalho conta as duas familias.
+    assert "routines_summary" in texto
+    assert "rotinas ativas" in texto
+
+
 def test_tela_de_backlog_propria():
     """O backlog tem tela propria (`#backlog`), como a de automacoes.
 
@@ -178,6 +209,41 @@ def test_card_de_backlog_expande_ao_clicar():
         assert rotulo in texto
     # Limpeza de 7 dias visivel na tela (o servidor e que filtra).
     assert "prune_days" in texto
+
+
+def test_js_das_duas_telas_tem_sintaxe_valida(tmp_path):
+    """Erro de sintaxe no JS nao aparece no pytest: `node --check` pega.
+
+    O `control.js` ja nasceu com uma chave a mais (o panel das rotinas ficou
+    fora da funcao) e o contrato textual continuou verde. Sem node instalado o
+    teste e pulado: o CI nao depende dele.
+    """
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node nao instalado")
+
+    from gaia.serve import web
+
+    arquivos: list[tuple[str, str]] = []
+    texto, _ = _html()
+    for indice, bloco in enumerate(re.findall(r"<script[^>]*>(.*?)</script>", texto, re.S)):
+        arquivos.append((f"index.html:{indice}", bloco))
+    for nome in ("control.js", "shared.js"):
+        bruto, _tipo = web.control_asset(nome)  # type: ignore[misc]
+        arquivos.append((nome, bruto.decode("utf-8")))
+
+    for nome, conteudo in arquivos:
+        # `node --check` decide o parser pela extensao: sempre `.js`.
+        caminho = tmp_path / (nome.replace(":", "_").replace("/", "_") + ".js")
+        caminho.write_text(conteudo, encoding="utf-8")
+        resultado = subprocess.run(
+            [node, "--check", str(caminho)], capture_output=True, text=True
+        )
+        assert resultado.returncode == 0, f"{nome}: {resultado.stderr[:600]}"
 
 
 def test_el_achata_listas_de_filhos():
@@ -666,3 +732,13 @@ def test_set_chinese_le_a_configuracao_do_motor():
     assert alvo.chinese() is True
     assert alvo.set_chinese(False) is False
     assert alvo.chinese() is False
+
+
+def test_painel_control_lista_as_rotinas():
+    from gaia.serve import web
+
+    bruto, _ = web.control_asset("control.js")  # type: ignore[misc]
+    js = bruto.decode("utf-8")
+    assert "Rotinas contínuas" in js
+    assert "dados.routines" in js
+    assert "trigger_label" in js
