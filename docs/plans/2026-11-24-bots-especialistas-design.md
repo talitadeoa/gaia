@@ -1,6 +1,6 @@
 # Bots especialistas — design
 
-> **Status: aprovado; fase 0 implementada, fases 1–4 não.** As
+> **Status: aprovado; fases 0 e 1 implementadas, fases 2–4 não.** As
 > cinco decisões do §10 estão tomadas. O plano de execução por fases está no §7
 > e é a base do `writing-plans`. Referência atemporal:
 > [`../../AGENTS.md`](../../AGENTS.md).
@@ -451,6 +451,20 @@ commitável sozinha.
    `.docx` continua fora, reindex remove arquivo apagado. Sem dependência nova.
 
 ### Fase 1 — MVP: bots isolados e selecionáveis
+
+> **Feita** (registry, `Config.bots`, `select_bot`/`/bot`, `/bots`/`/bot/select`
+> e o clone da dissertação). `gaia/bots/registry.py` e o TOML `[bots.<id>]` sao
+> a fonte das personas; `controller/modes.py` virou shim com as chaves antigas
+> (`assistente`→`gaia`, `pesquisadora`→`donna`, `trabalhadora`→`sabrina`,
+> `investidora`→`ariana`) resolvendo por alias, inclusive nas conversas antigas.
+> A politica da sessao e aplicada no `_open_session` em toda ativacao (e na
+> retomada), `/modes` e `POST /mode` continuam existindo como alias das rotas
+> novas, e o `GET /health`/`/engine` levam `bot`. O clone da dissertação virou
+> `talitadeoa/dissertacao` (commit `581db92`), com `~/SecondBrain/pesquisa`
+> migrado e **sem** symlink: `[bots.donna] scope = "~/dissertacao"`.
+> Fora do que o plano pedia: um bot bem configurado cuja pasta ainda nao existe
+> fica **indisponivel** (409 + motivo) em vez de derrubar o processo; TOML
+> invalido continua levantando no boot.
 
 4. **Registry + TOML** (`gaia/bots/registry.py`, `Config.bots`) com validação;
    `controller/modes.py` como shim (mesmas chaves de persona + aliases novos).

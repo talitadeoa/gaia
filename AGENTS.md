@@ -53,7 +53,8 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 | `gaia/controller/turns.py` | execução de um turno, eventos, permissão |
 | `gaia/controller/commands.py` | comandos de barra (`/status`, `/modelo`, `/sonhar`…) |
 | `gaia/controller/command_catalog.py` | catálogo dos comandos: ajuda do terminal, `GET /commands` e paleta do web |
-| `gaia/controller/modes.py` | personas/modos (prompt, não infraestrutura) |
+| `gaia/bots/registry.py` | `Bot` (id, nome, papel, diretriz, workspace, allowlist, escopo, modelo, aliases) + `DEFAULT_BOTS` dos cinco e `load_bots(cfg)` com validação dura |
+| `gaia/controller/modes.py` | shim de compatibilidade: `Persona` derivado do registry e `ALIASES` (chaves antigas → id do bot) |
 | `gaia/controller/prompt.py` | prompt em camadas (prefixo estável + bloco dinâmico) |
 | `gaia/controller/initiative.py` | lembretes e check-in proativo; `briefing.py` | briefings |
 | `gaia/controller/memory.py` | consolidação diária e sonho |
@@ -95,7 +96,7 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   Brain, dos workers proativos e do poller do Telegram. Nunca rode dois
   processos com o mesmo banco nem dois pollers do Telegram (409 `getUpdates` e
   briefing duplicado).
-- **Canais têm escopo.** O modo ativo é salvo por canal (`mode` no `cli`,
+- **Canais têm escopo.** O bot ativo é salvo por canal (`mode` no `cli`,
   `mode@telegram`/`mode@serve` fora dele). `channel` é `cli`, `telegram` ou
   `serve`.
 - **Permissões são a fronteira de segurança.** `write`, `edit` e `bash` exigem
@@ -238,6 +239,15 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `control/settings.update`, com backup). Qualquer mudanca nessa regra pede
   teste em `tests/test_backlog.py` (purga, rename, primeira sync, Agenda
   fora do ar, projeto sem repo).
+- **Bot e descritor, nao processo.** `Bot` (frozen) so carrega dados;
+  allowlist e `scope` sao a fronteira de seguranca e quem aplica e o
+  `AgentClient` via `SessionPolicy` (persistida no JSON da sessao). A politica
+  e reaplicada em **toda** ativacao, inclusive ao retomar conversa antiga —
+  senao a sessao da Donna volta com todas as ferramentas. `[bots.<id>]` no TOML
+  sobrepoe o default e configuracao invalida levanta no boot; default apontando
+  para pasta ausente deixa o bot **indisponivel** (409 + motivo em `GET /bots`),
+  nunca derruba a Gaia. `/modo` e `POST /mode` sao alias de `/bot` e
+  `POST /bot/select`, e as duas rotas leem o mesmo registry.
 - **Voz no web:** duas portas para o mesmo Whisper (`gaia/serve/voice.py`).
   `[serve] voice_source = "browser"` (padrao) faz o *navegador* gravar WAV
   16-bit mono e mandar em `POST /voice/upload` — o mini headless so transcreve;
@@ -286,7 +296,14 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `zh` (por compatibilidade) mas agora leva `traducao` e `lang`. Testes:
   `tests/test_serve_web.py` (rotas, evento por idioma), `test_orchestrator.py`
   (prompt/cache) e `test_textual_app.py` (rótulo na TUI).
-- **Novo modo:** `controller/modes.py` (`PERSONAS`) e teste em `test_modes.py`.
+- **Novo bot:** `gaia/bots/registry.py` (um `Bot` em `default_bots()` — id
+  curto e definitivo, porque vira `conversations.mode`, mais `tools`/`scope`/
+  `aliases`), `KNOWN_TOOLS` se a ferramenta for nova, `tests/test_bots.py` e
+  `tests/test_modes.py`. O TOML (`[bots.<id>]`) sobrepõe o default sem tocar no
+  código; `modes.py` não precisa mudar (é shim). Bot novo entra no rail do web
+  pela lista de `GET /bots`; seleção é `/bot <id>` (ou o antigo `/modo`).
+  Ferramenta/scope/workspace são a fronteira de segurança — prompt não é.
+- **Nova persona/modo:** não existe mais. Modo = bot; ver a receita acima.
 - **Mudança no fluxo de deploy:** o script roda no mini
   (`deploy/gaia-deploy.sh` → `~/.local/bin/deploy-gaia`), as unidades são
   `deploy/gaia-deploy.service`/`.timer` e o `gmin deploy` só orquestra por SSH
@@ -414,6 +431,15 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   tem a tabela de status item por item — mantenha-a atualizada.
   A correcao de proatividade no `serve` (`owns_telegram`, `_speak` mudo em
   `serve`) esta aplicada (commit `12f15b1`).
+- Bots especialistas: **fases 0 e 1 feitas** (eventos por sessao,
+  `SessionPolicy`, schema v12, `text_extensions`; registry `gaia/bots/`,
+  `[bots.<id>]`, `select_bot`, `/bot` e `/bots`/`/bot/select`). O clone da
+  dissertacao virou `talitadeoa/dissertacao` em `~/dissertacao` e o TOML da
+  maquina tem `[bots.donna] scope = "~/dissertacao"` (sem symlink em
+  `~/SecondBrain/pesquisa`). Fases 2–4 pendentes: rail `#b/<bot>` no web,
+  feed de atividade (`GET /bots/activity`, `POST /bots/seen`), automacoes por
+  bot e `falar_com_bot`/`BotBus`. Design em
+  `docs/plans/2026-11-24-bots-especialistas-design.md` (§7 tem o status).
 - Web do `serve` em paridade com a TUI: `instances.json` (mini/Mac),
   sessao de cookie no chat (`gaia_chat`) e no painel (`gaia_control`), seletor
   de instancia no header, modos, sessoes anteriores e proximas automacoes.

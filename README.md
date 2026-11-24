@@ -375,7 +375,7 @@ entendeu vai direto para o agente.
 |---|---|
 | `F1` | paleta de comandos |
 | `F2` | sessões anteriores |
-| `F3` / `Tab` | trocar de modo |
+| `F3` / `Tab` | trocar de bot |
 | `F4` | alternar seleção de texto |
 | `F5` | recolher/abrir os painéis |
 | `F6` | seletor de modelo |
@@ -390,19 +390,34 @@ gaia ask "resuma o que eu anotei hoje"
 gaia ask --no-voice "responda apenas: ok"
 ```
 
-## Modos
+## Bots
 
-Troca com `/modo <nome>`, `Tab` ou `F3`. Cada modo injeta uma diretriz no prompt
-e fica salvo entre sessões.
+Troca com `/bot <nome>` (ou o antigo `/modo <nome>`), `Tab` ou `F3`. Cada bot
+tem conversa, sessão de contexto, ferramentas permitidas e área de trabalho
+próprias; o que ele faz fica salvo entre sessões. O padrão se configura em
+`[interface] default_mode`.
 
-| Modo | Para quê |
-|---|---|
-| `assistente` (padrão) | agenda, rotinas, prioridades, conversa |
-| `pesquisadora` | mestrado, leitura, fichamento, escrita, metodologia |
-| `trabalhadora` | currículo, vagas, entrevistas, negociação |
-| `investidora` | bolsa, indicadores, orçamento, risco |
+| Bot | Nome | Para quê | Onde trabalha |
+|---|---|---|---|
+| `gaia` (padrão) | Gaia | agenda, rotinas, prioridades, conversa | repo da Gaia |
+| `donna` | Donna Haraway | mestrado, leitura, fichamento, escrita, metodologia | `~/dissertacao` |
+| `ariana` | Ariana Grande | bolsa, indicadores, orçamento, risco | dados locais |
+| `sabrina` | Sabrina Carpenter | currículo, vagas, entrevistas, negociação | `~/SecondBrain/cv` |
+| `ada` | Ada Lovelace | backlog, código e pull request | `~/pr-workspace` |
 
-O padrão se configura em `[interface] default_mode`.
+As chaves antigas (`assistente`, `pesquisadora`, `trabalhadora`, `investidora`)
+continuam valendo: `assistente` é a `gaia`, `pesquisadora` é a `donna`,
+`trabalhadora` é a `sabrina` e `investidora` é a `ariana` — inclusive nas
+conversas antigas.
+
+A fronteira de cada bot é a **allowlist de ferramentas** e o **escopo de
+arquivos**, não o prompt: a Donna tem `bash`/`pi` dentro de `~/dissertacao` e não
+alcança `~/pr-workspace`; a Ada nunca trabalha no repo da Gaia (o deploy faz
+`reset --hard`). A Ariana não usa o modelo no laço da carteira. O ajuste fica em
+`[bots.<id>]` no `config.toml`; bot mal configurado (ferramenta inexistente,
+workspace ausente, escopo que não contém o workspace) recusa subir com mensagem
+clara, e um bot que depende de uma pasta que ainda não existe aparece como
+indisponível em vez de derrubar a Gaia.
 
 ## Agente e ferramentas
 
@@ -410,7 +425,8 @@ O motor fica em `gaia/agent/` e fala direto com a API do provedor — sem
 servidor intermediário, sem harness externo.
 
 Sete ferramentas de base: `read`, `list`, `glob`, `grep`, `write`, `edit`,
-`bash` — iguais em todos os modos.
+`bash` — disponíveis para todos os bots, mas cada bot só recebe as que a
+allowlist dele libera.
 
 Quando `agenda.env_file` tem credencial válida, entram mais cinco, específicas
 da Agenda (não dependem de shell):
@@ -718,7 +734,7 @@ gaia browser screenshot https://exemplo.com captura.png
 | `/ajuda` · `/status` · `/tokens` | comandos · provedor/modelo/sessão · consumo |
 | `/buscar <termo>` · `/nota <título>` | Second Brain |
 | `/indexar` · `/novo` · `/consolidar [dia]` · `/sonhar [dia]` | reindexa · nova conversa · memória do dia · sonho noturno |
-| `/modelo [nº\|slug]` · `/modo [nome]` | lista/troca modelo · troca persona |
+| `/modelo [nº\|slug]` · `/bot [nome]` (`/modo`) | lista/troca modelo · troca de bot |
 | `/bolsa <ticker>` · `/carteira [add\|remover <ticker>]` | cotação · carteira |
 | `/metas` · `/painel` · `/foco [definir\|limpar]` | metas do ciclo · painel (`/painel` é alias de `/metas`) · foco |
 | `/tarefas [sync\|fazer\|concluir\|limpar]` | tarefas de longo prazo |
