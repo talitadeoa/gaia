@@ -427,3 +427,9 @@ def test_agent_client_liga_a_ferramenta_ao_banco(tmp_path, cfg, store):
     # Idempotente: chamar de novo (todo bootstrap) nao duplica.
     client.set_memory_store(store)
     assert client.tools.names().count("criar_automacao") == 1
+
+
+def test_pm_block_sem_o_as(cfg, store):
+    """"9h da noite" tambem vale 21:00 e o rotulo nao guarda o qualificador."""
+    assert parse_time("9h da noite de sexta") == "21:00"
+    assert parse_label("9h da noite de sexta me lembre de estudar") == "Estudar"

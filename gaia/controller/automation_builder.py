@@ -110,12 +110,14 @@ _PM_HINT_RE = re.compile(r"\b(?:da|a|de)\s+(?:tarde|noite)\b")
 # A expressao "9h da noite" e um bloco so: a limpeza do rotulo precisa levar
 # junto o qualificador, senao o lembrete comeca com "noite de sexta...".
 _PM_BLOCK_RE = re.compile(
-    r"\b(?:as|pelas|por\s+volta\s+das)\s+([01]?\d|2[0-3])\s*h?(?:\s*:\s*[0-5]\d)?"
-    r"\s*(?:da|a|de)\s+(?:tarde|noite)\b"
+    r"\b(?:(?:as|pelas|por\s+volta\s+das)\s+)?([01]?\d|2[0-3])"
+    r"(?:\s*h|\s*:\s*[0-5]\d)?\s*(?:da|a|de)\s+(?:tarde|noite)\b"
 )
 
 # ---- alvo ------------------------------------------------------------------
-_REMINDER_RE = re.compile(r"\b(?:lembr(?:e|ar|ete|ete-se)|lembrete|avis(?:e|ar)|avisa)\b")
+_REMINDER_RE = re.compile(
+    r"\b(?:lembr(?:e|ar|ete)|lembrete|avis(?:e|ar)|avisa)\b"
+)
 _AGENDA_RE = re.compile(r"\bagend(?:a|as|inha)\b")
 _ESTUDOS_RE = re.compile(r"\b(?:estud(?:o|ar|os)|simulad(?:o|os)|abin)\b")
 _SUMMARY_HINT_RE = re.compile(r"\b(?:resum(?:o|e|a|ir)|manda(?:r)?|envia(?:r)?|manda)\b")
@@ -143,7 +145,6 @@ _FILLER_WORDS = frozenset(
         "e",
         "em",
         "me",
-        "my",
         "na",
         "nas",
         "no",
@@ -161,7 +162,6 @@ _FILLER_WORDS = frozenset(
         "todas",
         "todo",
         "todos",
-        "por favor",
     }
 )
 
