@@ -47,6 +47,10 @@ class ToolContext:
     pi: Any = None
     # XConfig | None: habilita a ferramenta `post_x` (publica no X).
     x: Any = None
+    # Config completa + MemoryStore: habilitam `criar_automacao` (a ferramenta
+    # grava na tabela `automations`, entao sem banco ela nao existe).
+    cfg: Any = None
+    store: Any = None
 
     def resolve(self, raw: str) -> Path:
         if not (raw or "").strip():

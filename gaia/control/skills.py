@@ -160,6 +160,22 @@ SKILLS: tuple[Skill, ...] = (
         tags=("audio", "ferramentas"),
     ),
     Skill(
+        id="automations",
+        name="Automacoes criadas pelo chat",
+        description=(
+            "Cria automacao recorrente (lembrete, resumo da agenda, resumo de "
+            "estudos) a partir de uma frase, com confianca medida por regras. "
+            "O agendador executa pelo id `user:*` da tabela `automations`."
+        ),
+        kind="tool_group",
+        # Sem estes gates a automacao nasce mas nunca executa: o handler checa
+        # os mesmos caminhos em `_user_automation_*`.
+        requires=("agent.tools",),
+        provides=("criar_automacao",),
+        module="gaia/controller/automation_builder.py, gaia/agent/tools/automations.py",
+        tags=("automacao", "ferramentas"),
+    ),
+    Skill(
         id="planilhas",
         name="Planilhas",
         description="Le e escreve planilhas dentro do Second Brain.",

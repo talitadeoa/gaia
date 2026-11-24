@@ -36,7 +36,7 @@ despacha — pede o repo no ponto de adicionar e grava no TOML.
 | situação na Agenda | o que acontece no backlog |
 |---|---|
 | página nova (`estudo backlog`) | grupo novo com `needs_repo: true`, `repo: ""`; item não despacha até definir o repo |
-| página existente | insere/atualiza como hoje (PR nunca volta para `pending`) |
+| página existente | insere/atualiza como hoje; **linha que sumiu da página sai do backlog** (`pr`/`done` ficam, e página cortada por `max_items` não remove nada) |
 | página renomeada (`gaia backlog` -> `gaia2 backlog`) | itens mudam de `page_key` (mesmo id, mesmo status, FIFO preservado) |
 | página apagada | grupo inteiro sai do banco |
 | primeira sync após a migração | nada é apagado (só grava e marca `agenda_seen_at`) |
@@ -45,6 +45,12 @@ despacha — pede o repo no ponto de adicionar e grava no TOML.
 Detecção de renome: ao final da varredura, para cada `page_key` conhecido que
 não está mais na Agenda, procura um `page_id` (renomeado) ou um grupo antigo de
 mesmo conjunto de fingerprints e move. Sem casamento, apaga.
+
+**Espelho no item, não só no grupo.** `sync_page(prune=True)` apaga a linha
+que a pessoa removeu/reescreveu na página — era o outro lado do `zaya` (19
+linhas na página e 64 no banco). Ficam `pr`/`done` (histórico do PR aberto) e o
+chamador desliga o prune quando truncou a página em `max_items` (corte não é
+remoção).
 
 **Janela de varredura:** `agenda_scan` passa de 50 para 200. Com a regra "não
 está na Agenda -> sai", uma página fora da janela sumiria por engano. Continua

@@ -29,7 +29,9 @@ import time
 from datetime import datetime
 from typing import Any
 
+from gaia.briefing.compose import collect_tasks
 from gaia.control import automations as automations_mod
+from gaia.control.runs import record_run
 from gaia.controller.contract import OrchestratorContract
 
 # id da automacao -> metodo que executa o corpo da rotina.
@@ -42,6 +44,16 @@ _AUTOMATION_METHODS: dict[str, str] = {
     "memory:daily": "_automation_memory",
     "memory:dream": "_automation_dream",
 }
+
+# Automacoes criadas pelo chat (id ``user:*``) nao vem do registry: o handler
+# sai da coluna ``skill`` da tabela. Este mapa e a ponte skill -> metodo.
+USER_SKILL_METHODS: dict[str, str] = {
+    "reminder": "_user_automation_reminder",
+    "agenda_summary": "_user_automation_agenda",
+    "estudos_summary": "_user_automation_estudos",
+}
+
+USER_AUTOMATION_PREFIX = "user:"
 
 
 class SchedulerMixin(OrchestratorContract):
@@ -92,6 +104,13 @@ class SchedulerMixin(OrchestratorContract):
 
     # ------------------------------------------------------------- execucao
     def _automation_handler(self, item: automations_mod.Automation):
+        # `user:*` e despachado pela SKILL (a mesma automacao pode ser criada
+        # varias vezes com horarios diferentes); o resto vem do registry.
+        if item.id.startswith(USER_AUTOMATION_PREFIX):
+            nome = USER_SKILL_METHODS.get(item.skill)
+            if nome is None:
+                return None
+            return getattr(self, nome, None)
         nome = _AUTOMATION_METHODS.get(item.id)
         if nome is None:
             return None
@@ -169,6 +188,112 @@ class SchedulerMixin(OrchestratorContract):
     def _automation_result(self, item: automations_mod.Automation) -> dict[str, Any]:
         linha = self.store.last_run(item.skill, item.id)
         return dict(linha or {})
+
+    # ---------------------------------------------- automacoes do chat (v1)
+    async def _user_automation_reminder(
+        self,
+        item: automations_mod.Automation,
+        now: datetime,
+        *,
+        trigger: str = "schedule",
+        attempt: int = 1,
+    ) -> bool:
+        """Lembrete criado pelo chat: entrega o texto na hora marcada.
+
+        Nao passa por ``_fire_due_reminders``: esse laco le a tabela
+        ``reminders`` (prazo unico) e aqui a recorrencia e da automacao. O run
+        registra a execucao real; a reserva da janela e do agendador.
+        """
+        if not self.cfg.proactive.reminders:
+            return False
+        texto = str(item.params.get("text") or "").strip() or item.name
+        async with record_run(
+            self.store,
+            kind="reminder",
+            automation=item.id,
+            trigger=trigger,
+            delivery=item.delivery,
+            attempt=attempt,
+        ) as run:
+            await self._say_proactive(f"Lembrete: {texto}", count=False)
+            run.detail = f"lembrete entregue ({item.delivery})"
+        return True
+
+    async def _user_automation_agenda(
+        self,
+        item: automations_mod.Automation,
+        now: datetime,
+        *,
+        trigger: str = "schedule",
+        attempt: int = 1,
+    ) -> bool:
+        """Resumo da Agenda do dia (pendentes e feitas), sem usar o modelo."""
+        if not self.cfg.agenda.enabled or not self.agenda.enabled:
+            return False
+        async with record_run(
+            self.store,
+            kind="agenda_summary",
+            automation=item.id,
+            trigger=trigger,
+            delivery=item.delivery,
+            attempt=attempt,
+        ) as run:
+            notes = await self.agenda.notes_on(now.date().isoformat())
+            tarefas = collect_tasks(notes)
+            pendentes = [t for t in tarefas if not t.done]
+            feitas = [t for t in tarefas if t.done]
+            limite = max(1, int(self.cfg.agenda.max_items))
+            linhas = [
+                f"Resumo da agenda de {now.strftime('%d/%m')}",
+                f"Pendentes: {len(pendentes)} · feitas: {len(feitas)}",
+            ]
+            linhas.extend(f"- ☐ {t.text}" for t in pendentes[:limite])
+            if not pendentes:
+                linhas.append("- nada pendente")
+            await self._say_proactive("\n".join(linhas), count=False)
+            run.detail = f"{len(pendentes)} pendente(s), {len(feitas)} feita(s)"
+        return True
+
+    async def _user_automation_estudos(
+        self,
+        item: automations_mod.Automation,
+        now: datetime,
+        *,
+        trigger: str = "schedule",
+        attempt: int = 1,
+    ) -> bool:
+        """Resumo do progresso dos simulados (Abin Suite), sem usar o modelo."""
+        if not self.cfg.estudos.enabled or not self.estudos.enabled:
+            return False
+        from gaia.estudos.progresso import (
+            formatar_resumo,
+            resumo_semana,
+        )
+
+        async with record_run(
+            self.store,
+            kind="estudos_summary",
+            automation=item.id,
+            trigger=trigger,
+            delivery=item.delivery,
+            attempt=attempt,
+        ) as run:
+            results = await self.estudos.results()
+            goals = await self.estudos.goals()
+            resumo = resumo_semana(results, goals, now=now)
+            estado = "estudou hoje" if resumo.estudou_hoje else "ainda nao estudou hoje"
+            marca = (
+                "meta em dia"
+                if not resumo.atrasado
+                else "meta atrasada"
+            )
+            texto = (
+                f"Estudos nesta semana: {formatar_resumo(resumo)}. "
+                f"{estado}; {marca}."
+            )
+            await self._say_proactive(texto, count=False)
+            run.detail = formatar_resumo(resumo)
+        return True
 
     def _reset_attempt_clock(self, item: automations_mod.Automation) -> None:
         """Zera o intervalo entre tentativas da rotina (so no disparo manual)."""

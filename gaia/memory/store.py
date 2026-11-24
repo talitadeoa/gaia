@@ -9,6 +9,7 @@ e escrita -- passam pelo mesmo ``RLock``, e o banco roda em WAL com
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 # Versao atual do schema. Incremente ao adicionar novas migracoes em _migrate.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # v5: conversas separadas por canal (cli, telegram, whatsapp).
 DEFAULT_CHANNEL = "cli"
@@ -138,7 +139,12 @@ class MemoryStore:
                     retry_max INTEGER NOT NULL DEFAULT 2,
                     retry_backoff_minutes REAL NOT NULL DEFAULT 10,
                     last_result TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    -- v11: automacoes criadas pelo chat (id `user:*`) precisam
+                    -- de nome proprio e dos parametros do handler; para as do
+                    -- registry os dois ficam vazios (o config manda).
+                    name TEXT NOT NULL DEFAULT '',
+                    params TEXT NOT NULL DEFAULT ''
                 );
 
                 -- v8: backlog do painel (paginas "backlog" da Agenda + o que
@@ -233,6 +239,24 @@ class MemoryStore:
                     "CREATE INDEX IF NOT EXISTS idx_backlog_page "
                     "ON backlog_items(source, project, fingerprint)"
                 )
+        if version < 11:
+            # v11: automacoes dinamicas (`user:*`) guardam nome e parametros.
+            # `params` e JSON em texto: handler e painel leem o mesmo campo.
+            existentes = {
+                row["name"]
+                for row in self._conn.execute(
+                    "PRAGMA table_info(automations)"
+                ).fetchall()
+            }
+            with self._conn:
+                if "name" not in existentes:
+                    self._conn.execute(
+                        "ALTER TABLE automations ADD COLUMN name TEXT NOT NULL DEFAULT ''"
+                    )
+                if "params" not in existentes:
+                    self._conn.execute(
+                        "ALTER TABLE automations ADD COLUMN params TEXT NOT NULL DEFAULT ''"
+                    )
         if version < SCHEMA_VERSION:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
 
@@ -622,6 +646,20 @@ class MemoryStore:
             row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else default
 
+    def count_meta(self, prefix: str) -> int:
+        """Quantas chaves de ``meta`` comecam com o prefixo.
+
+        Contadores por dia (ex.: ``automation_created:2026-11-23:``) usam
+        chaves independentes em vez de um numero: assim a mesma criacao
+        reenviada nao conta duas vezes e um crash no meio nao perde a conta.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM meta WHERE substr(key, 1, ?) = ?",
+                (len(prefix), prefix),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     # ------------------------------------------------------------------ runs
     def begin_run(
         self,
@@ -798,19 +836,24 @@ class MemoryStore:
         retry_max: int = 2,
         retry_backoff_minutes: float = 10.0,
         last_result: str = "",
+        name: str = "",
+        params: dict[str, Any] | None = None,
     ) -> None:
         """Cria ou substitui uma automacao (todas as colunas).
 
         ``days`` e ``at``/``until`` ficam como texto (``"0,2,4"`` e
-        ``"HH:MM"``) para a tabela nao depender de tipo do SQLite.
+        ``"HH:MM"``) para a tabela nao depender de tipo do SQLite. ``params``
+        e o JSON do handler (ex.: ``{"text": "estudar"}`` do lembrete); vai
+        como texto para o painel e o agendador lerem o mesmo campo.
         """
         with self._lock, self._conn:
             self._conn.execute(
                 """
                 INSERT INTO automations
                     (id, skill, enabled, days, at, until, delivery,
-                     retry_max, retry_backoff_minutes, last_result, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     retry_max, retry_backoff_minutes, last_result, name,
+                     params, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     skill = excluded.skill,
                     enabled = excluded.enabled,
@@ -821,6 +864,8 @@ class MemoryStore:
                     retry_max = excluded.retry_max,
                     retry_backoff_minutes = excluded.retry_backoff_minutes,
                     last_result = excluded.last_result,
+                    name = excluded.name,
+                    params = excluded.params,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -834,6 +879,8 @@ class MemoryStore:
                     int(retry_max),
                     float(retry_backoff_minutes),
                     last_result,
+                    name,
+                    json.dumps(params or {}, ensure_ascii=False, sort_keys=True),
                     _now(),
                 ),
             )
@@ -850,12 +897,18 @@ class MemoryStore:
             "retry_max",
             "retry_backoff_minutes",
             "last_result",
+            "name",
+            "params",
         }
         mudancas = {chave: valor for chave, valor in campos.items() if chave in permitidas}
         if not mudancas:
             return self.get_automation(automation_id) is not None
         if "enabled" in mudancas:
             mudancas["enabled"] = int(bool(mudancas["enabled"]))
+        if "params" in mudancas and not isinstance(mudancas["params"], str):
+            mudancas["params"] = json.dumps(
+                mudancas["params"] or {}, ensure_ascii=False, sort_keys=True
+            )
         colunas = ", ".join(f"{chave} = ?" for chave in mudancas)
         valores = [*mudancas.values(), _now(), automation_id]
         with self._lock, self._conn:

@@ -211,6 +211,12 @@ class Orchestrator(
 
     async def _bootstrap(self) -> None:
         await self.client.ensure_ready()
+        # A ferramenta `criar_automacao` precisa do banco e da config do
+        # processo: o AgentClient nasce antes do store no bootstrap, entao a
+        # ligacao acontece aqui (uma vez, idempotente).
+        ligar = getattr(self.client, "set_memory_store", None)
+        if callable(ligar):
+            ligar(self.store)
         if self.cfg.agent.auto_approve:
             self.ui.warning(
                 "auto-aprovação de ferramentas do agente está ATIVA (agent.auto_approve=true)"

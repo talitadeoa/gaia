@@ -79,12 +79,30 @@ class AgentClient:
             estudos=cfg.estudos,
             pi=cfg.pi,
             x=cfg.x,
+            cfg=cfg,
         )
         self.tools: ToolSet = (
             build_tools(self._tool_context) if cfg.agent.tools else ToolSet()
         )
         self._always_approved: set[str] = set()
         self._logger = logging.getLogger("gaia.agent")
+
+    def set_memory_store(self, store: Any) -> None:
+        """Liga o banco ao contexto das ferramentas (``criar_automacao``).
+
+        O ``AgentClient`` nasce antes do ``MemoryStore`` no bootstrap; por isso
+        a ferramenta so entra no ToolSet aqui, e nao no ``__init__``. Quem e
+        dono do banco (``Orchestrator``) chama uma vez.
+        """
+        if store is None:
+            return
+        self._tool_context.store = store
+        # `criar_automacao` depende de config E banco: o ToolSet foi montado
+        # sem o store, entao a ferramenta entra agora (uma unica vez).
+        if self.cfg.agent.tools and "criar_automacao" not in self.tools.names():
+            from gaia.agent.tools.automations import build_automation_tools
+
+            self.tools.add(*build_automation_tools())
 
     def set_audiobook_watch(self, callback: Any) -> None:
         """Canal entrega o MP3: callback(task, job) quando a narracao termina."""
