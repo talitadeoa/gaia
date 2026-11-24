@@ -1,0 +1,436 @@
+# Bots especialistas — design
+
+> **Status: proposta, não aplicado.** Este documento decide a arquitetura; o
+> plano de execução por fases está no §7 e vira `writing-plans` só depois do
+> aval. Referência atemporal: [`../../AGENTS.md`](../../AGENTS.md).
+>
+> Vocabulário adotado (pedido da Talita): **bot**, não "agent". "Agente" fica
+> reservado para o motor único (`AgentClient`/`Orchestrator`), que continua
+> sendo **um só**.
+
+## 1. Objetivo
+
+Transformar os quatro modos de hoje (`assistente`, `pesquisadora`,
+`trabalhadora`, `investidora`) em cinco bots com nome próprio, cada um com:
+
+- thread de conversa e contexto próprios (histórico que não se mistura);
+- **ferramentas** próprias (allowlist) e **área de trabalho** própria;
+- automações em segundo plano atribuídas a ele;
+- presença no painel web: selecionar, conversar, ver atividade e avisos.
+
+| bot | nome | papel | workspace | ferramentas |
+|---|---|---|---|---|
+| `gaia` | Gaia | orquestradora: conversa, agenda, rotina, e fala com os outros bots | `~/gaia` (diretório atual) | todas + `falar_com_bot` |
+| `donna` | Donna Haraway | dissertação, ensaios, revisão, método | `~/SecondBrain/pesquisa` | `read/list/glob/grep/write/edit` + `planilha`, escopo `~/SecondBrain` |
+| `ariana` | Ariana Grande | bolsa, watchlist, alertas | dados (`~/.local/share/gaia`) | `bolsa`, `carteira`, `planilha`, `read` + automação `market` |
+| `sabrina` | Sabrina Carpenter | vagas, CV sob medida, carta | `~/SecondBrain/cv` | `career`, `read/list/glob/grep`, `write` restrito a `cv/` |
+| `ada` | Ada Lovelace | backlog, código, PR | `~/pr-workspace` (**nunca** `~/gaia`) | `read/write/edit/bash/grep/glob`, `pi`, `backlog` |
+
+### O que um bot **não** é
+
+- **Não é um processo.** Um processo escritor só (`gaia serve`) é invariante do
+  repo. Bot é configuração + estado, não unidade de deploy.
+- **Não é um modelo separado obrigatório.** `model` é opcional por bot; vazio
+  herda o global. Modelo por bot é custo, não identidade.
+- **Não é um "system prompt gigante".** Identidade é prompt; o isolamento real
+  é feito na camada de ferramentas e de filesystem (§4.2). Prompt sozinho não
+  isola nada — um texto malicioso dentro do Second Brain pode pedir para "ler
+  a pasta da Ada" e o modelo obedece se o handle existir.
+
+## 2. Auditoria — o que já existe e será reaproveitado
+
+| Necessidade | Já existe | Como o bot usa |
+|---|---|---|
+| histórico separado por persona | `conversations(project_path, mode, channel)` + `turns` (`memory/store.py`) | `mode` **passa a ser o id do bot** — zero migração de dados |
+| sessão de contexto do modelo | `AgentSession` + `SessionStore` (JSON em `data/sessions/`), uma por conversa | nenhuma mudança: cada bot tem a sua |
+| prompt em duas camadas | `controller/prompt.py::compose_system` | a diretriz do bot entra no prefixo estável (cacheável) |
+| restringir ferramentas por turno | `AgentClient._run_turn(tool_names=...)` → `session.allowed_tools` → `_run_tool` recusa | é aqui que a allowlist do bot vira barreira de verdade |
+| diretório de trabalho das tools | `ToolContext.directory` (usado por `filesystem.py` e `bash` como `cwd`) | vira **workspace do bot**, por sessão |
+| agendador único | `controller/scheduler.py` + tabela `automations` + `runs` (schema v7/v11) | automação ganha coluna `bot` |
+| fila durável de um item | `gaia/backlog/worker.py` + `BacklogMixin` | Ada herda a fila pronta |
+| eventos para o web | `RemoteUI.emit` (SSE, `seq`, `run`) | ganha o campo `bot` e o filtro por bot na tela |
+| telas com URL | hash `#automacoes`, `#backlog`, `pintarTelaAtual` | `#b/<bot>` entra no mesmo mecanismo |
+| configuração fora do repo | `~/.config/gaia/config.toml` | bots vivem lá (o `gaia-deploy.timer` faz `reset --hard`, não toca em config) |
+
+**Não existe hoje (e o design não finge que existe):**
+
+- contexto de ferramentas por sessão (o `ToolContext` é construído uma vez no
+  `AgentClient.__init__` e compartilhado por todas as sessões);
+- evento por sessão (o `_events` é uma fila única; dois turnos simultâneos
+  roubam eventos um do outro — ver §4.5);
+- atribuição de `runs`/`automations` a um bot;
+- qualquer noção de "bot falou com bot".
+
+## 3. Decisões fechadas
+
+| # | Decisão | Motivo |
+|---|---|---|
+| D1 | Bot é **descritor declarativo** (código com defaults + override no TOML), não processo nem plugin | um processo escritor; sobrevive ao `reset --hard` do deploy porque a config está em `~/.config` |
+| D2 | `conversations.mode` **é** o id do bot | a separação de histórico já existe e é testada; renomear coluna não compra nada |
+| D3 | Isolamento em 4 camadas: prompt, allowlist de tools, workspace/filesystem, conversa | prompt sozinho não é fronteira de segurança |
+| D4 | Um turno **interativo** por vez (o 409 atual continua) | a pessoa lê uma conversa por vez; paralelizar chat custa refatorar estado global do `Orchestrator` sem ganho de UX |
+| D5 | Segundo plano é **concorrente**, com fila e eventos próprios | é o que a Ariana e a Ada precisam de verdade |
+| D6 | Automação de bot pode ser determinística (código) ou por prompt (`bot_task`) | não reescrever `market/`, `career/`, `backlog/` em prompt |
+| D7 | Segundo plano **não** amplia permissão | `write`/`edit`/`bash` continuam exigindo aprovação; sem ninguém para aprovar, o job falha e avisa |
+| D8 | Bot não tem memória vetorial própria no MVP | `facts`/`recall` (schema v6) ainda não existem; não inventar agora |
+| D9 | Inter-bot é chamada one-shot com profundidade máxima, não debate multi-turno | evita loop, custo e confusão de transcrição |
+| D10 | Nenhum roteamento automático de mensagem entre bots no MVP | bot errado respondendo é pior que bot nenhum; a seleção é explícita |
+
+## 4. Arquitetura
+
+### 4.1 Registry de bots
+
+`gaia/bots/registry.py` (novo):
+
+```python
+@dataclass(frozen=True)
+class Bot:
+    id: str                 # gaia | donna | ariana | sabrina | ada
+    name: str
+    role: str               # uma linha, para a sidebar
+    directive: str          # persona (prefixo estavel do prompt)
+    workspace: str          # diretorio de trabalho das tools
+    tools: tuple[str, ...]  # allowlist; vazio = todas (so o `gaia`)
+    scope: str = ""         # teto de leitura/escrita (path prefix)
+    model: str = ""         # vazio = modelo global
+    aliases: tuple[str, ...] = ()
+    can_message: tuple[str, ...] = ()   # a quem pode chamar `falar_com_bot`
+```
+
+`DEFAULT_BOTS: dict[str, Bot]` no código (os cinco acima, com as diretrizes
+que já existem em `controller/modes.py`, renomeadas). `load_bots(cfg)` mescla
+`cfg.bots` (TOML) sobre os defaults: o código é a semente, o TOML é a decisão.
+Validação dura no carregamento: id desconhecido em `tools`/`can_message`,
+`workspace` inexistente, `scope` fora de `~/SecondBrain`/`~/pr-workspace`
+derrubam o boot com mensagem clara (bot mal configurado não deve subir "meio
+ligado").
+
+TOML (seção nova, sem segredo dentro):
+
+```toml
+[bots.donna]
+name = "Donna Haraway"
+workspace = "~/SecondBrain/pesquisa"
+scope = "~/SecondBrain"
+tools = ["read", "list", "glob", "grep", "write", "edit", "planilha"]
+```
+
+`controller/modes.py` vira **shim de compatibilidade**: `PERSONAS` é derivado do
+registry (mesmo `dataclass Persona`), `ALIASES` ganha os nomes ("donna",
+"haraway", "ariana", "sabrina", "ada"), e `parse_mode_switch("vira Donna")`
+continua funcionando. Assim `/modo`, `Tab`/`F3` e `test_modes.py` não quebram.
+
+### 4.2 Isolamento em quatro camadas
+
+| camada | onde | o que garante |
+|---|---|---|
+| 1. prompt | `compose_system(bot_directive, ...)` | identidade e tom; cacheável; **não** é segurança |
+| 2. allowlist | `AgentSession.allowed_tools` (já existe) setado a partir de `bot.tools` | o modelo pode *pedir* `bash`, mas `_run_tool` recusa: "ferramenta indisponivel neste bot" |
+| 3. workspace/escopo | `ToolContext` por sessão + `ctx.resolve` | `read/write/edit/list/glob/grep` resolvem contra `bot.workspace` e não saem de `bot.scope`; `bash` roda com `cwd=workspace` |
+| 4. conversa | `conversations.mode = bot.id` + sessão por conversa | histórico, resumo de compactação e tokens são por bot |
+
+Mudanças necessárias na camada 2 e 3 (hoje não existem):
+
+- `AgentSession` ganha `policy: SessionPolicy | None` com `tools`,
+  `directory`, `scope` — persistido no JSON da sessão, então uma sessão retomada
+  depois de restart não volta a ter as ferramentas todas.
+- `AgentClient.set_session_policy(session_id, policy)` (idempotente) e
+  `_run_tool` monta o contexto efetivo:
+  `dataclasses.replace(self._tool_context, directory=policy.directory, scope=policy.scope)`.
+- `ToolContext.scope` novo: `resolve()` recusa caminho fora do escopo com
+  `ToolError` (mensagem em português, sem vazar path absoluto). Vazio = sem teto
+  (comportamento de hoje). `allow_outside_project` continua valendo por cima.
+- `bash` **não** é sandbox (armadilha já registrada no AGENTS.md). A allowlist
+  resolve o caso "o bot não pede bash"; ela não resolve "bash malicioso dentro
+  do workspace". Para Ada, o caminho é o mesmo de hoje: workspace isolado,
+  `pi` protegido, e PR revisado por humano.
+
+### 4.3 Roteamento
+
+Não há classificador de intenção entre bots no MVP. O roteamento é explícito:
+
+1. **Seleção** — sidebar do web (`#b/donna`), `/bot donna`, `Tab`, ou o modo
+   atual da TUI. Troca de bot = `select_bot(id)` = o `select_mode` de hoje com
+   validação (bot desconhecido → 400, não cai no padrão em silêncio).
+2. **Menção dentro da conversa** — "pergunta pra Donna o que ela acha do
+   capítulo 2" é uma chamada de ferramenta (`falar_com_bot`), não uma troca de
+   thread. A resposta entra no histórico do bot chamador como resultado de
+   ferramenta e no histórico do chamado como turno `context`.
+3. **Automação** — sempre atribuída a um bot (coluna `bot`), nunca "descoberta"
+   em tempo de execução.
+
+Fase futura (não MVP): um roteador opcional no `gaia` que sugere "isso é com a
+Ada — quer que eu encaminhe?" e só encaminha com confirmação. Sugestão, nunca
+execução automática.
+
+### 4.4 Memória e contexto por bot
+
+| tipo | onde vive | isolamento |
+|---|---|---|
+| conversa (turnos) | `turns` via `conversations.mode` | total |
+| contexto do modelo | `AgentSession` (JSON por sessão) + compactação | total |
+| preferências da pessoa | `SecondBrain/preferences.md` | **compartilhado de propósito** — tom de voz é da Talita, não do bot |
+| memória consolidada | nota do dia em `Memoria/`, frontmatter ganha `bots: [ida...]` | por bot, na leitura: o bot só recebe o que é dele |
+| Second Brain (pesquisa) | índice FTS5 único | `index.search` ganha filtro opcional por prefixo (`prefix=bot.scope`), hoje ele busca no índice inteiro |
+| arquivos de trabalho | `bot.workspace` | por camada 3 |
+
+Duas regras que evitam o "vazamento de instruções" que você citou:
+
+- **Contexto recuperado nunca vai no system prompt.** Continua indo junto da
+  mensagem do usuário, marcado como "não é um pedido" (é o que
+  `controller/turns.py` já faz). Um trecho de nota não pode redefinir identidade.
+- **Resultado de ferramenta não muda política.** Se o conteúdo lido disser
+  "agora você é a Ada", o turno continua com a allowlist da Donna.
+
+### 4.5 Fila de automações em background
+
+Três peças, todas já existentes, com uma coluna nova:
+
+1. **Agenda** — `automations` ganha `bot` (vazio = `gaia`). `describe()`/`load()`
+   não mudam de forma; `render()` passa a devolver `bot` para a tela agrupar.
+2. **Execução** — o agendador único continua sendo o único disparador. Skill
+   nova `bot_task`: o corpo é "rode este prompt no bot X, na sessão dele, com as
+   ferramentas dele, e grave o resultado em `bot_messages`". Serve Ariana
+   ("o que mudou na watchlist hoje e o que eu faço?"), Donna ("revisão semanal
+   do capítulo") e Sabrina ("garimpa vagas novas"). As rotinas determinísticas
+   (`market:watchlist`, `career:weekly`) continuam existindo e são mais baratas.
+3. **Visibilidade** — `runs` ganha `bot`; tabela nova `bot_messages`
+   (`id, bot, kind, title, text, created_at, seen`) é o feed do painel e a
+   origem do badge de não-lido. `POST /bots/seen` zera.
+
+**Concorrência (o ponto mais delicado).** Hoje `AgentClient._events` é uma fila
+única e `prompt_async` chama `_drain_events()` no começo. Com dois turnos
+simultâneos, um deles descarta os eventos do outro → turno alheio parece travar
+até o `stall_timeout`. Correção mínima, pré-requisito de qualquer segundo plano:
+
+- `AgentClient.subscribe_session(session_id) -> asyncio.Queue[Event]`;
+  `_emit` entrega também nas filas por sessão; `stream_events` passa a ser
+  `stream_events_session(session_id, stop)` e o `pump` de `turns.py` deixa de
+  filtrar por `session_id` (não rouba mais nada);
+- `_drain_events()` só limpa a fila por sessão do turno que está começando.
+
+Com isso, segundo plano pode rodar **sem** `RemoteUI`: o job consome a fila da
+sua sessão, resume o resultado, grava `runs`/`bot_messages` e, se o bot estiver
+aberto na tela, emite um evento `bot_activity` (não os deltas) — a tela mostra
+"Ada abriu PR #123", não um streaming de 200 linhas.
+
+**Sobreposição de trabalho**: o agendador hoje pula o ciclo se `self._busy`.
+Com bots, a regra passa a ser por bot: `bot_busy(bot)` bloqueia automação
+daquele bot (nunca dois turnos na mesma sessão), mas Ariana não espera a Ada.
+
+### 4.6 Bots conversando entre si
+
+Base mínima, desenhada para não virar bola de neve:
+
+- `BotBus` (in-process, `gaia/bots/bus.py`): `ask(from_bot, to_bot, question,
+  depth) -> str`. Roda na sessão do destino, com a allowlist dele, enfileirando
+  no mesmo lock por bot (se o destino está ocupado, espera com timeout).
+- Ferramenta `falar_com_bot(to, question)`: existe só nos bots com
+  `can_message` não vazio (`gaia` → todos; `donna` → `gaia` só). `to` limitado a
+  `bot.can_message`; `depth` máximo 2; `to == from` recusado; orçamento de
+  tokens por chamada (`max_steps` menor, `max_tokens` menor).
+- Auditoria: cada chamada grava uma linha em `bot_messages` (kind
+  `inter_bot`) e um turno `context` no histórico dos dois lados. A tela
+  consegue mostrar "Gaia perguntou à Donna" sem misturar as bolhas.
+- Falha do destino (bot ocupado, erro, timeout) volta como resultado de
+  ferramenta com erro legível: o chamador decide o que dizer. Nunca silêncio.
+
+### 4.7 UI (painel web)
+
+A estrutura de telas existente é reaproveitada; o hash é a fonte de verdade.
+
+```
+#b/<bot>        conversa daquele bot (default #b/gaia)
+#automacoes     automações, agrupadas por bot
+#backlog        backlog (Ada)
+#control        painel administrativo (token próprio, inalterado)
+```
+
+- **Rail à esquerda**: avatar/inicial, nome, badge de não-lido, indicador de
+  "rodando". Clique = `location.hash = "#b/<id>"` (F5 e voltar continuam).
+- **Troca de bot**: `POST /bot/select {id}` → o motor troca conversa+sessão e
+  devolve `{bot, engine, history, sessions}`; o cliente redesenha as bolhas
+  (mesmo caminho de `/session/open`).
+- **Eventos** ganham `bot`. O cliente ignora eventos de bot que não é o atual,
+  exceto `bot_activity`/`notice`, que vão para o feed de atividade.
+- **Atividade**: `GET /bots/activity?limit=` devolve os últimos `runs` +
+  `bot_messages` com `bot`, `status`, `when`, `title`. O card no aside mostra os
+  cinco bots com a última atividade (o mesmo componente do aside hoje, um por
+  bot). "Rodar agora" continua em `/automations/run`.
+- **Nova thread**: "+ nova" já existe por modo; passa a ser por bot.
+- **Sessões**: `GET /sessions` filtra pelo bot ativo (já é por persona hoje).
+
+A TUI não é caminho crítico (está em processo de aposentadoria —
+`2026-11-23-aposentar-tui.md`), mas `/bot` entra no catálogo de comandos para
+não divergir.
+
+### 4.8 API (rotas novas, token do chat)
+
+| método | rota | devolve |
+|---|---|---|
+| `GET` | `/bots` | `[{id, name, role, tools, workspace_label, unread, busy}]` |
+| `POST` | `/bot/select` | `{bot, engine, history, sessions}` |
+| `GET` | `/bots/activity` | `{messages: [...], runs: [...]}` |
+| `POST` | `/bots/seen` | `{ok, unread: 0}` |
+
+Regra mantida: `run`/pausar continua no token do **chat**; credencial e
+admin continuam só em `/control/api/*` (`GAIA_CONTROL_TOKEN`).
+
+## 5. Modelo de dados — schema v12
+
+```sql
+-- atribuicao: automacao e execucao pertencem a um bot (). vazio = `gaia`.
+ALTER TABLE automations ADD COLUMN bot TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs        ADD COLUMN bot TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_runs_bot ON runs(bot, started_at DESC);
+
+-- feed do painel: resultado de segundo plano e recados entre bots
+CREATE TABLE IF NOT EXISTS bot_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'job',   -- job | inter_bot | aviso
+    title TEXT NOT NULL DEFAULT '',
+    text TEXT NOT NULL DEFAULT '',
+    seen INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bot_messages_bot
+    ON bot_messages(bot, seen, created_at DESC);
+```
+
+Migração é `ALTER TABLE` idempotente (mesmo padrão da v10/v11). Nenhuma tabela
+existente muda de semântica; `mode` continua sendo a chave do histórico.
+
+## 6. Fluxos
+
+**Turno interativo**
+
+```
+web (#b/donna) -> POST /bot/select -> Orchestrator.select_bot (troca conversa+sessao)
+web -> POST /turn -> turns.py compose_system(bot) -> AgentClient.prompt_async
+     policy do bot -> _run_tool recusa fora da allowlist/escopo
+     eventos (com bot) -> SSE -> tela desenha so o bot ativo
+```
+
+**Segundo plano (Ariana)**
+
+```
+scheduler_tick -> automation bot=ariana due? -> claim
+  -> handler market (deterministico) OU bot_task(prompt)
+  -> runs(bot=ariana) + bot_messages(ariana, "3 altas, 1 alerta PETR4")
+  -> SSE bot_activity -> badge de nao-lido na sidebar
+```
+
+**Inter-bot**
+
+```
+turno da Gaia -> tool falar_com_bot("donna", "status do capitulo 2?")
+  -> Bus.ask(depth=1) -> sessao da Donna (policy dela) -> resposta
+  -> volta como resultado de ferramenta -> Gaia responde a Talita
+```
+
+## 7. Plano por fases
+
+Cada fase fecha verde (`pytest`, `ruff check gaia tests`, `mypy`) e é
+commitável sozinha.
+
+### Fase 0 — fundação (pré-requisito, sem UI nova)
+
+1. **Eventos por sessão** — `AgentClient.subscribe_session` +
+   `_emit` com fan-out + `_drain_events(session_id)`; `turns.py` passa a usar a
+   fila da sessão. *Teste*: dois `prompt_async` simultâneos em sessões
+   diferentes recebem exatamente os próprios eventos (hoje um perde).
+2. **Política por sessão** — `SessionPolicy` (tools/directory/scope) em
+   `AgentSession`, `set_session_policy`, `_run_tool` com contexto efetivo,
+   `ToolContext.scope` + teste de `resolve` recusando fora do escopo.
+   *Teste*: sessão com allowlist não executa `bash`; `read` fora do escopo
+   devolve `ToolError`; sessão retomada do disco mantém a política.
+3. **Schema v12** — colunas `bot` + `bot_messages` + `MemoryStore` métodos
+   (`add_bot_message`, `list_bot_messages`, `mark_bot_seen`, `unread_by_bot`).
+   *Teste*: migração idempotente, ordem e contagem do feed.
+
+### Fase 1 — MVP: bots isolados e selecionáveis
+
+4. **Registry + TOML** (`gaia/bots/registry.py`, `Config.bots`) com validação;
+   `controller/modes.py` como shim (mesmas chaves de persona + aliases novos).
+   *Teste*: defaults válidos; TOML sobrepõe; tool inexistente levanta erro;
+   `parse_mode_switch("vira Donna")`.
+5. **`Orchestrator.select_bot(id)`** aplicando política à sessão no
+   `_open_session` (workspace, tools, modelo) e gravando
+   `mode = bot.id`. `/bot` no `command_catalog.py` + despacho em `commands.py`
+   (o teste de catálogo×AST exige os dois).
+   *Teste*: trocar para `donna` cria conversa `mode=donna`, chama
+   `set_session_policy` com o workspace certo; bot desconhecido não cai no
+   padrão.
+6. **Rotas `/bots` e `/bot/select`** no `Target` + `server.py`, com `bot` no
+   `/health` e no `engine`. *Teste*: contrato em `test_serve_web.py`
+   (id sem duplicata, seletor existente) e `test_serve_app.py` (409 ocupado).
+
+### Fase 2 — sidebar e atividade (fecha o MVP visível)
+
+7. **Sidebar + `#b/<bot>`** no `index.html` (rail, badge, indicador de rodando;
+   `corpo` do chat redesenha em `/bot/select`). *Teste*: `test_serve_web.py`
+   confere hash→tela, ids e que o rail é montado a partir de `/bots`.
+8. **Feed de atividade + não-lido** (`GET /bots/activity`, `POST /bots/seen`,
+   evento `bot_activity` no `tratarEvento`). *Teste*: evento com `bot` alheio
+   não entra na conversa; badge zera.
+
+### Fase 3 — automações por bot
+
+9. **`automations.bot`/`runs.bot`** no seed (`describe`), no `render`, no
+   `/automations` (agrupado) e no scheduler (gate por bot, não global).
+   *Teste*: Ariana e Ada devidas no mesmo minuto rodam; automação da Ariana não
+   roda com a sessão da Ariana ocupada e não bloqueia a Ada.
+10. **Skill `bot_task`** + `run_bot_task(bot_id, prompt)` consumindo a fila da
+    sessão, gravando `runs` + `bot_messages`; `criar_automacao` aceita
+    `bot` na lista fechada. *Teste*: job grava mensagem, erro vira `runs.failed`
+    com `error_kind` e mensagem no feed.
+11. **Ada no backlog** — `BacklogWorker` etiqueta `bot=ada`; o PR aberto vira
+    `bot_messages`. *Teste*: `test_backlog.py` com o campo novo.
+
+### Fase 4 — bots conversando
+
+12. **`BotBus` + ferramenta `falar_com_bot`** com profundidade, allowlist de
+    destino e auditoria. *Teste*: chamada de 2 níveis funciona, 3 níveis recusa,
+    destino desconhecido recusa, ciclo A→B→A para.
+13. **Tela**: agrupar `inter_bot` no feed. *Teste* de contrato.
+
+## 8. Escopo cortado (YAGNI deliberado)
+
+- **Processo por bot.** Multiplica escritor de `gaia.db`, poller do Telegram e
+  memória. Fora.
+- **Paralelismo de chat interativo.** Um turno por vez, como hoje. Quando doer
+  de verdade, a Fase 0 já deixou o caminho pronto (eventos por sessão).
+- **MCP / plugin por bot.** A allowlist resolve o problema real (o bot não
+  chama o que não deve); infra de plugin é outro projeto.
+- **Memória vetorial por bot.** Depende do schema v6, que não existe.
+- **Roteador automático de mensagem.** Só sugestão, e depois.
+- **Auto-merge de PR da Ada.** PR aberto, revisão humana. Sempre.
+
+## 9. Critérios de aceite do MVP (Fases 0–2)
+
+1. Cinco bots na sidebar; cada um abre a própria thread, com histórico próprio
+   preservado depois de F5 e de restart do `serve`.
+2. Donna não consegue `bash` nem escrever fora de `~/SecondBrain` — verificado
+   por teste, não por prompt.
+3. Ariana não vê a conversa da Ada em `/history`, `/sessions` nem no prompt.
+4. Um segundo plano rodando não rouba evento nem atrasa o turno interativo de
+   outro bot.
+5. `pytest`, `ruff check gaia tests` e `mypy` verdes; nenhuma rota nova sem
+   teste de contrato.
+
+## 10. Perguntas abertas (decidir antes da Fase 3)
+
+1. **Donna**: a dissertação vive em `~/SecondBrain/pesquisa` mesmo, ou há um
+   repo separado (LaTeX/Overleaf) que ela precisa alcançar? Define `workspace`
+   e `scope`.
+2. **Ariana**: o resumo deve continuar puramente determinístico (custo zero) ou
+   você quer a leitura analítica do modelo todo dia? A segunda custa tokens
+   diários e merece um horário fixo.
+3. **Sabrina**: CV em `.tex` compilado localmente (`pdflatex`) ou markdown? Muda
+   as ferramentas e o `scope` de escrita.
+4. **Ada**: rodar o `pi` (harness externo) ou o agente escrever direto no
+   workspace? Hoje o `pi` é o caminho que já abre PR; manter reduz trabalho.
+5. **Nomes**: os cinco nomes ficam como estão (incluindo "Gaia" como
+   orquestradora)? O id é contrato de config, então decidir agora evita
+   migração depois.
