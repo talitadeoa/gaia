@@ -99,19 +99,34 @@ _DAY_RANGE_RE = re.compile(
 )
 
 # ---- hora ------------------------------------------------------------------
+# Qualificador depois da hora: "9 da noite" vale 21:00, mas "7 da manha" ja e
+# 07:00 (somar 12 daria 19). Nos dois casos o qualificador sai do rotulo.
+_PERIODOS = r"tarde|noite|madrugada|manha"
+_PM_PERIODOS = frozenset({"tarde", "noite"})
+_QUALIFICADOR_RE = re.compile(r"\s*(?:da|a|de)\s+(?:" + _PERIODOS + r")")
+# Minuto falado com palavra: "as 9 e meia", "as 10 e quinze".
+_MINUTO_FALADO = {"meia": 30, "quinze": 15}
 _COLON_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
-_HOUR_RE = re.compile(r"\b([01]?\d|2[0-3])\s*h(?:oras?)?\b(?:\s*([0-5]\d))?")
+# ``9h``, ``9h30``, ``18 horas``: o minuto colado no ``h`` (sem dois-pontos) e
+# comum na fala e sem o ``\s*`` opcional ele sumia (o horario virava vazio).
+_HOUR_RE = re.compile(r"\b([01]?\d|2[0-3])\s*h(?:oras?)?\s*([0-5]\d)?\b")
 _AS_HOUR_RE = re.compile(
     r"\b(?:as|pelas|por\s+volta\s+das)\s+([01]?\d|2[0-3])\b(?:\s*(?:horas?|h))?"
+)
+_E_HOUR_RE = re.compile(
+    r"\b(?:as|pelas|por\s+volta\s+das)\s+([01]?\d|2[0-3])\s+e\s+(meia|quinze|[0-5]?\d)\b"
 )
 _NOON_RE = re.compile(r"\bmeio[\s-]?dia\b")
 _MIDNIGHT_RE = re.compile(r"\bmeia[\s-]?noite\b")
 _PM_HINT_RE = re.compile(r"\b(?:da|a|de)\s+(?:tarde|noite)\b")
 # A expressao "9h da noite" e um bloco so: a limpeza do rotulo precisa levar
 # junto o qualificador, senao o lembrete comeca com "noite de sexta...".
+# O minuto vem de tres ramos (``9h30``/``9 horas``, ``9:30`` ou ``9 e meia``):
+# cada ramo tem o seu grupo e quem le o horario pega o primeiro que veio.
 _PM_BLOCK_RE = re.compile(
     r"\b(?:(?:as|pelas|por\s+volta\s+das)\s+)?([01]?\d|2[0-3])"
-    r"(?:\s*h|\s*:\s*[0-5]\d)?\s*(?:da|a|de)\s+(?:tarde|noite)\b"
+    r"(?:\s*h(?:oras?)?\s*([0-5]\d)?|\s*:\s*([0-5]\d)|\s*e\s+(meia|quinze|[0-5]?\d))?"
+    r"\s*(?:da|a|de)\s+(" + _PERIODOS + r")\b"
 )
 
 # ---- alvo ------------------------------------------------------------------
@@ -144,6 +159,7 @@ _FILLER_WORDS = frozenset(
         "dos",
         "e",
         "em",
+        "favor",
         "me",
         "na",
         "nas",
@@ -236,32 +252,50 @@ def parse_days(text: str) -> tuple[int, ...]:
     return tuple(sorted(dias))
 
 
+def _minuto(valor: str | None) -> int:
+    """Minuto do grupo casado: ``30`` vale 30 e ``meia`` tambem."""
+    if not valor:
+        return 0
+    if valor in _MINUTO_FALADO:
+        return _MINUTO_FALADO[valor]
+    return int(valor)
+
+
 def _time_match(text: str) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
     """``(hora, minuto)`` e o span usado para limpar o rotulo."""
     norm = _normalize(text)
-    # Bloco completo primeiro: "as 9h da noite" vale 21:00 e o rotulo perde
-    # tudo, nao so "as 9h".
+    # Bloco completo primeiro: "as 9h da noite" vale 21:00, "9h30 da noite"
+    # vale 21:30 e o rotulo perde tudo, nao so "as 9h".
     for match in _PM_BLOCK_RE.finditer(norm):
         hora = int(match.group(1))
+        minuto = _minuto(match.group(2) or match.group(3) or match.group(4))
         # "21h da noite" ja e 21: pela convencao da lingua, o qualificador so
-        # soma quando a hora declarada e menor que 12.
-        if hora < 12:
+        # soma quando a hora declarada e menor que 12. "7 da manha" fica 07.
+        if hora < 12 and match.group(5) in _PM_PERIODOS:
             hora += 12
-        return (hora, 0), match.span()
-    for regex in (_COLON_RE, _HOUR_RE, _AS_HOUR_RE):
+        return (hora, minuto), match.span()
+    # "as 9 e meia" antes de "as 9": o padrao mais especifico primeiro, senao
+    # o qualificador sobra no rotulo.
+    for regex in (_COLON_RE, _HOUR_RE, _E_HOUR_RE, _AS_HOUR_RE):
         for match in regex.finditer(norm):
             antes = norm[max(0, match.start() - 4) : match.start()]
             if regex is _HOUR_RE and antes.rstrip().endswith("em"):
                 # "em 2 horas" e prazo relativo, nao horario do dia.
                 continue
             hora = int(match.group(1))
-            minuto = int(match.group(2) or 0) if match.lastindex and match.lastindex >= 2 else 0
+            minuto = _minuto(match.group(2)) if (match.lastindex or 0) >= 2 else 0
             if minuto > 59:
                 continue
             # "9h da noite" -> 21:00 (o padrao brasileiro de falar a hora).
             if hora < 12 and _PM_HINT_RE.search(norm):
                 hora += 12
-            return (hora, minuto), match.span()
+            fim = match.end()
+            # O span do rotulo leva junto o qualificador ("da noite", "da
+            # manha") mesmo quando a hora veio por outro padrao.
+            qualificador = _QUALIFICADOR_RE.match(norm, fim)
+            if qualificador is not None:
+                fim = qualificador.end()
+            return (hora, minuto), (match.start(), fim)
     for regex, hora in ((_NOON_RE, 12), (_MIDNIGHT_RE, 0)):
         achado = regex.search(norm)
         if achado:

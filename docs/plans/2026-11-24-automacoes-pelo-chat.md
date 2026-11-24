@@ -37,9 +37,11 @@ o modelo.
 
 - **dias**: `toda sexta`, `seg, qua e sex`, `de segunda a sexta`, `todos os
   dias`/`todo dia`, `dias úteis`, `fim de semana`.
-- **hora**: `9h`, `9:30`, `às 9`, `pelas 18 horas`, `meio-dia`, `meia-noite`,
-  `9h da noite` → 21:00, `7h da tarde` → 19:00. `em 2 horas` é prazo relativo e
-  **não** vira horário do dia.
+- **hora**: `9h`, `9h30`, `9:30`, `às 9`, `às 9 e meia`, `pelas 18 horas`,
+  `meio-dia`, `meia-noite`, `9h da noite` → 21:00, `9:30 da noite` → 21:30,
+  `7h da tarde` → 19:00, `7 da manhã` → 07:00 (o qualificador só soma quando é
+  `tarde`/`noite`/`madrugada`; `manhã` só sai do rótulo). `em 2 horas` é prazo
+  relativo e **não** vira horário do dia.
 - **skill alvo**: `reminder` ("me lembre/avise"), `agenda_summary` ("resumo da
   agenda"), `estudos_summary` ("resumo dos estudos/simulados").
 - **entrega**: `telegram` / `aqui`. Sem menção, `telegram` se o bot está

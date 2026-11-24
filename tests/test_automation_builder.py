@@ -91,6 +91,44 @@ def test_parse_time_tarde_e_noite():
     assert parse_time("as 21h da noite") == "21:00"
 
 
+def test_pm_block_sem_o_as():
+    """"9h da noite" tambem vale 21:00 e o rotulo nao guarda o qualificador."""
+    assert parse_time("9h da noite de sexta") == "21:00"
+    assert parse_label("9h da noite de sexta me lembre de estudar") == "Estudar"
+
+
+def test_pm_block_com_minutos():
+    """O minuto do bloco PM nao pode ser descartado (9:30 da noite = 21:30)."""
+    assert parse_time("as 9:30 da noite") == "21:30"
+    assert parse_time("as 9h30 da noite") == "21:30"
+    assert parse_time("as 9 horas da noite") == "21:00"
+    assert parse_time("as 10:15 da noite") == "22:15"
+    # Meia-noite continua sendo 00:00 (nao casa o bloco "9 e meia").
+    assert parse_time("meia-noite") == "00:00"
+
+
+def test_manha_nao_soma_doze_e_sai_do_rotulo():
+    """"7 da manha" e 07:00: o qualificador so some do rotulo, nao vira 19:00."""
+    assert parse_time("as 7 da manha") == "07:00"
+    assert parse_time("as 7 horas da manha") == "07:00"
+    assert parse_label("as 7 da manha me lembre de correr") == "Correr"
+    assert parse_time("as 3 da madrugada") == "03:00"
+
+
+def test_minuto_falado():
+    """"as 9 e meia" e "as 10 e quinze" tem minuto, nao hora cheia."""
+    assert parse_time("as 9 e meia") == "09:30"
+    assert parse_time("as 10 e quinze") == "10:15"
+    assert parse_time("as 9 e 45 da noite") == "21:45"
+    assert parse_label("as 9 e meia me lembre de dormir") == "Dormir"
+
+
+def test_label_sem_minuto_orfao_e_por_favor_no_comeco():
+    """Sobra de minuto e educacao no comeco nao entram no lembrete."""
+    assert parse_label("as 10 e 30 da noite me lembre de dormir") == "Dormir"
+    assert parse_label("por favor me lembre de correr as 6h") == "Correr"
+
+
 def test_parse_time_sem_hora_ou_invalida():
     assert parse_time("toda sexta me lembre de estudar") == ""
     assert parse_time("as 25h") == ""
@@ -427,9 +465,3 @@ def test_agent_client_liga_a_ferramenta_ao_banco(tmp_path, cfg, store):
     # Idempotente: chamar de novo (todo bootstrap) nao duplica.
     client.set_memory_store(store)
     assert client.tools.names().count("criar_automacao") == 1
-
-
-def test_pm_block_sem_o_as(cfg, store):
-    """"9h da noite" tambem vale 21:00 e o rotulo nao guarda o qualificador."""
-    assert parse_time("9h da noite de sexta") == "21:00"
-    assert parse_label("9h da noite de sexta me lembre de estudar") == "Estudar"
