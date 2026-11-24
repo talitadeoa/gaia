@@ -1,8 +1,9 @@
 # Bots especialistas — design
 
-> **Status: proposta, não aplicado.** Este documento decide a arquitetura; o
-> plano de execução por fases está no §7 e vira `writing-plans` só depois do
-> aval. Referência atemporal: [`../../AGENTS.md`](../../AGENTS.md).
+> **Status: aprovado; design fechado, implementação ainda não começada.** As
+> cinco decisões do §10 estão tomadas. O plano de execução por fases está no §7
+> e é a base do `writing-plans`. Referência atemporal:
+> [`../../AGENTS.md`](../../AGENTS.md).
 >
 > Vocabulário adotado (pedido da Talita): **bot**, não "agent". "Agente" fica
 > reservado para o motor único (`AgentClient`/`Orchestrator`), que continua
@@ -22,8 +23,8 @@ Transformar os quatro modos de hoje (`assistente`, `pesquisadora`,
 |---|---|---|---|---|
 | `gaia` | Gaia | orquestradora: conversa, agenda, rotina, e fala com os outros bots | `~/gaia` (diretório atual) | todas + `falar_com_bot` |
 | `donna` | Donna Haraway | dissertação, ensaios, revisão, método | `~/dissertacao` (clone de `talitadeoa/dissertacao`) | `read/list/glob/grep/write/edit` + `bash`, `pi`, escopo `~/dissertacao` |
-| `ariana` | Ariana Grande | bolsa, watchlist, alertas | dados (`~/.local/share/gaia`) | `bolsa`, `carteira`, `planilha`, `read` + automação `market` |
-| `sabrina` | Sabrina Carpenter | vagas, CV sob medida, carta | `~/SecondBrain/cv` | `career`, `read/list/glob/grep`, `write` restrito a `cv/` |
+| `ariana` | Ariana Grande | bolsa, watchlist, alertas | dados (`~/.local/share/gaia`) | `bolsa`, `carteira`, `planilha`, `read` — **sem modelo no laço** |
+| `sabrina` | Sabrina Carpenter | vagas, CV sob medida, carta | `~/SecondBrain/cv` | `career`, `read/list/glob/grep`, `write` restrito a `cv/`, `bash` (`pdflatex`) |
 | `ada` | Ada Lovelace | backlog, código, PR | `~/pr-workspace` (**nunca** `~/gaia`) | `read/write/edit/bash/grep/glob`, `pi`, `backlog` |
 
 ### O que um bot **não** é
@@ -103,10 +104,17 @@ class Bot:
 `DEFAULT_BOTS: dict[str, Bot]` no código (os cinco acima, com as diretrizes
 que já existem em `controller/modes.py`, renomeadas). `load_bots(cfg)` mescla
 `cfg.bots` (TOML) sobre os defaults: o código é a semente, o TOML é a decisão.
+
+**`id` é curto e estável; `name` é o nome completo** (`donna` → "Donna
+Haraway"). O `id` vira `conversations.mode` e chave de config — renomear depois
+exige migração (`MODE_KEY_RENAMES` já existe para isso). Por isso o `id` nasce
+definitivo: `gaia`, `donna`, `ariana`, `sabrina`, `ada`.
+
 Validação dura no carregamento: id desconhecido em `tools`/`can_message`,
-`workspace` inexistente, `scope` fora de `~/SecondBrain`/`~/pr-workspace`
-derrubam o boot com mensagem clara (bot mal configurado não deve subir "meio
-ligado").
+`workspace` inexistente, `scope` que não é diretório absoluto existente **ou
+que não contém o `workspace`** — tudo derruba o boot com mensagem clara (bot
+mal configurado não deve subir "meio ligado", e `scope` que não contém o
+`workspace` deixaria o bot sem conseguir ler o que ele mesmo escreve).
 
 TOML (seção nova, sem segredo dentro):
 
@@ -233,12 +241,46 @@ Três peças, todas já existentes, com uma coluna nova:
 
 1. **Agenda** — `automations` ganha `bot` (vazio = `gaia`). `describe()`/`load()`
    não mudam de forma; `render()` passa a devolver `bot` para a tela agrupar.
-2. **Execução** — o agendador único continua sendo o único disparador. Skill
-   nova `bot_task`: o corpo é "rode este prompt no bot X, na sessão dele, com as
-   ferramentas dele, e grave o resultado em `bot_messages`". Serve Ariana
-   ("o que mudou na watchlist hoje e o que eu faço?"), Donna ("revisão semanal
-   do capítulo") e Sabrina ("garimpa vagas novas"). As rotinas determinísticas
-   (`market:watchlist`, `career:weekly`) continuam existindo e são mais baratas.
+2. **Execução** — o agendador único continua sendo o único disparador.
+   `market:watchlist` é **determinístico hoje** e continua assim (§4.5a): o
+   corpo busca cotação, monta a mensagem e entrega, sem uma única chamada ao
+   modelo. Skill nova `bot_task` (prompt no bot X, na sessão dele, com as
+   ferramentas dele) serve **Donna** ("revisão semanal do capítulo") e
+   **Sabrina** ("garimpa vagas novas") — nunca a Ariana no resumo diário. Costa
+   abaixo:
+
+| automação | custo de modelo |
+|---|---|
+| `market:watchlist` (Ariana) | zero |
+| `career:weekly` (Sabrina) | zero (`gaia/career/` já pontua por regra) |
+| `backlog` (Ada) | `pi` (chave própria, fora do modelo do chat) |
+| `bot_task` (Donna/Sabrina/Ada quando pedido) | tokens do modelo do bot |
+
+### 4.5a Ariana: determinístico, e o painel é a entrega principal
+
+O que já existe: `market:watchlist` no agendador, `briefing.market_days/at/until`
+no TOML, `Watchlist` em `~/.local/share/gaia/watchlist.json`, cotação em
+`finance/quotes.py` e a mensagem em `briefing/market.py` (`market_message`).
+Nada disso usa o modelo.
+
+O que muda com a Ariana é a **entrega**, hoje com dois problemas:
+
+1. **Gate duplo de config.** `_automation_market` devolve `False` sem
+   `briefing.market_enabled` **e** `telegram.enabled`, e `Skill(requires=...)`
+   repete o mesmo par. Num `serve` headless sem Telegram a automação nunca roda
+   — e a tela mostra "ligada" (armadilha registrada no AGENTS.md: gate no laço
+   ganha do checkbox).
+   *Correção*: o rendimento passa a ser o do painel. Sem Telegram, a saída é
+   `bot_messages` (feed da Ariana) + `runs.detail`; com Telegram, os dois. O
+   `requires` vira só `briefing.market_enabled`.
+2. **Nada consome a cotação sem Telegram.** `runs` guarda que rodou, mas não o
+   conteúdo. Por isso a Ariana precisa de um consumidor próprio (o feed) e não
+   só de um repasse ao Telegram.
+
+Regra que fica: **a Ariana nunca chama o modelo no laço.** Se um dia houver
+leitura analítica ("o que isso significa para a minha carteira"), ela entra como
+`bot_task` **semanal** e explicitamente opt-in, com custo declarado na tela —
+nunca dentro do `market:watchlist`.
 3. **Visibilidade** — `runs` ganha `bot`; tabela nova `bot_messages`
    (`id, bot, kind, title, text, created_at, seen`) é o feed do painel e a
    origem do badge de não-lido. `POST /bots/seen` zera.
@@ -291,8 +333,11 @@ A estrutura de telas existente é reaproveitada; o hash é a fonte de verdade.
 #control        painel administrativo (token próprio, inalterado)
 ```
 
-- **Rail à esquerda**: avatar/inicial, nome, badge de não-lido, indicador de
-  "rodando". Clique = `location.hash = "#b/<id>"` (F5 e voltar continuam).
+- **Rail à esquerda**: inicial em círculo, **nome completo** ("Donna Haraway"
+  — é o que define o bot para você; o `id` só aparece no tooltip e na config),
+  badge de não-lido, indicador de "rodando". Clique = `location.hash =
+  "#b/<id>"` (F5 e voltar continuam). Com cinco bots o rail não precisa recolher;
+  se crescer, colapsa para iniciais com o nome no tooltip.
 - **Troca de bot**: `POST /bot/select {id}` → o motor troca conversa+sessão e
   devolve `{bot, engine, history, sessions}`; o cliente redesenha as bolhas
   (mesmo caminho de `/session/open`).
@@ -439,19 +484,30 @@ commitável sozinha.
     `/automations` (agrupado) e no scheduler (gate por bot, não global).
     *Teste*: Ariana e Ada devidas no mesmo minuto rodam; automação da Ariana
     não roda com a sessão da Ariana ocupada e não bloqueia a Ada.
-11. **Skill `bot_task`** + `run_bot_task(bot_id, prompt)` consumindo a fila da
+11. **Ariana entrega no painel** (§4.5a) — `market:watchlist` grava
+    `bot_messages` além do Telegram opcional; `requires` perde
+    `telegram.enabled`; `_automation_market` deixa de exigir Telegram; o
+    `runs.detail` passa a carregar o resumo. *Teste*: sem Telegram a automação
+    roda e o feed recebe a mensagem; com Telegram, os dois; cotação
+    indisponível vira `detail` com o ticker, não silêncio.
+12. **Skill `bot_task`** + `run_bot_task(bot_id, prompt)` consumindo a fila da
     sessão, gravando `runs` + `bot_messages`; `criar_automacao` aceita
     `bot` na lista fechada. *Teste*: job grava mensagem, erro vira `runs.failed`
     com `error_kind` e mensagem no feed.
-12. **Ada no backlog** — `BacklogWorker` etiqueta `bot=ada`; o PR aberto vira
+13. **Ada no backlog** — `BacklogWorker` etiqueta `bot=ada`; o PR aberto vira
     `bot_messages`. *Teste*: `test_backlog.py` com o campo novo.
+14. **Sabrina em LaTeX** — a persona/diretriz passa a exigir `.tex` (base
+    `cv-pt.tex` intocável, variante `cv-pt-<empresa>.tex`, `pdflatex` pelo
+    `bash` aprovado, nunca editar a base nem inventar experiência).
+    *Teste*: diretriz da Sabrina menciona `cv-pt.tex` e `pdflatex`;
+    `scope` dela é `~/SecondBrain/cv`.
 
 ### Fase 4 — bots conversando
 
-13. **`BotBus` + ferramenta `falar_com_bot`** com profundidade, allowlist de
+15. **`BotBus` + ferramenta `falar_com_bot`** com profundidade, allowlist de
     destino e auditoria. *Teste*: chamada de 2 níveis funciona, 3 níveis recusa,
     destino desconhecido recusa, ciclo A→B→A para.
-14. **Tela**: agrupar `inter_bot` no feed. *Teste* de contrato.
+16. **Tela**: agrupar `inter_bot` no feed. *Teste* de contrato.
 
 ## 8. Escopo cortado (YAGNI deliberado)
 
@@ -478,20 +534,25 @@ commitável sozinha.
 5. `pytest`, `ruff check gaia tests` e `mypy` verdes; nenhuma rota nova sem
    teste de contrato.
 
-## 10. Perguntas abertas (decidir antes da Fase 3)
+## 10. Decisões tomadas (todas fechadas)
 
-1. ~~**Donna**: repo separado para a dissertação?~~ **Resolvido**: repo
-   privado `talitadeoa/dissertacao` (branch `main`, ainda vazio), clone em
-   `~/dissertacao`, conteúdo de `~/SecondBrain/pesquisa` migra para lá. Ver
-   §4.4a. Resta decidir symlink vs. `scope` separado — decisão de setup da
-   Fase 1, não de arquitetura.
-2. **Ariana**: o resumo deve continuar puramente determinístico (custo zero) ou
-   você quer a leitura analítica do modelo todo dia? A segunda custa tokens
-   diários e merece um horário fixo.
-3. **Sabrina**: CV em `.tex` compilado localmente (`pdflatex`) ou markdown? Muda
-   as ferramentas e o `scope` de escrita.
-4. **Ada**: rodar o `pi` (harness externo) ou o agente escrever direto no
-   workspace? Hoje o `pi` é o caminho que já abre PR; manter reduz trabalho.
-5. **Nomes**: os cinco nomes ficam como estão (incluindo "Gaia" como
-   orquestradora)? O id é contrato de config, então decidir agora evita
-   migração depois.
+1. **Donna** — repo privado `talitadeoa/dissertacao` (branch `main`, ainda
+   vazio), clone em `~/dissertacao`, conteúdo de `~/SecondBrain/pesquisa` migra
+   para lá. Ver §4.4a. Único resto é setup da Fase 1: symlink vs. `scope`
+   separado.
+2. **Ariana** — **determinística**. `market:watchlist` continua sem uma linha
+   de modelo (já é assim em `briefing/market.py`), e a entrega principal passa a
+   ser o painel (`bot_messages`), com Telegram opcional. Regra fixa: leitura
+   analítica só como `bot_task` semanal opt-in, nunca no laço. Ver §4.5a.
+3. **Sabrina** — CV em **LaTeX**: base `cv-pt.tex` intocável, variante
+   `cv-pt-<empresa>.tex`, `pdflatex` pelo `bash` aprovado. É o que já existe em
+   `~/SecondBrain/cv` (8 `.tex` + PDFs). `scope` = `~/SecondBrain/cv`.
+4. **Ada** — abre PR **direto a partir dos itens do backlog**, pelo caminho que
+   já existe (`BacklogJob`: clone → branch → `pi` → commit → push → `gh pr
+   create`). O chat dela serve para acompanhar/revisar, não para substituir o
+   `pi`.
+5. **Nomes** — `id` curto e definitivo (`gaia`, `donna`, `ariana`, `sabrina`,
+   `ada`), `name` completo na interface ("Donna Haraway", "Ariana Grande",
+   "Sabrina Carpenter", "Ada Lovelace"). Como o `id` vira
+   `conversations.mode`, ele nasce estável; renomear depois exigiria
+   `MODE_KEY_RENAMES`.
