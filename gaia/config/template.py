@@ -116,6 +116,9 @@ reindex_on_start = false        # ligue para reindexar a cada inicio
 backup_before_write = true
 default_folder = "Inbox"
 preferences_file = ""          # vazio => <secondbrain.path>/preferences.md
+# Extensoes lidas como texto puro (a Donna usa [".md", ".tex", ".bib"]).
+# .docx e .pdf ficam de fora: exigiriam biblioteca nova.
+text_extensions = [".md"]
 
 [interface]
 show_banner = true

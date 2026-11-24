@@ -169,6 +169,10 @@ class SecondBrainConfig(BaseModel):
     embed_timeout: float = 120.0
     # Vazio => <secondbrain.path>/preferences.md
     preferences_file: str = ""
+    # Extensoes indexadas como texto puro. `.docx`/`.pdf` ficam de fora de
+    # proposito: exigem biblioteca nova (zip+XML). Para a Donna, use
+    # [".md", ".tex", ".bib", ".txt"].
+    text_extensions: list[str] = Field(default_factory=lambda: [".md"])
     exclude: list[str] = Field(
         default_factory=lambda: [".obsidian", ".git", ".trash", ".gaia", "node_modules"]
     )
