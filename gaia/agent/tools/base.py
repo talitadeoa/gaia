@@ -45,6 +45,8 @@ class ToolContext:
     estudos: Any = None
     # PiConfig | None: habilita a ferramenta `pi` (harness de codigo externo).
     pi: Any = None
+    # XConfig | None: habilita a ferramenta `post_x` (publica no X).
+    x: Any = None
 
     def resolve(self, raw: str) -> Path:
         if not (raw or "").strip():

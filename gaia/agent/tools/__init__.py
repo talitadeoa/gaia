@@ -20,6 +20,7 @@ from gaia.agent.tools.filesystem import (
 from gaia.agent.tools.pi import build_pi_tools
 from gaia.agent.tools.planilhas import build_planilha_tools
 from gaia.agent.tools.shell import BASH_TOOL
+from gaia.agent.tools.x import build_x_tools
 from gaia.estudos.client import EstudosClient
 
 
@@ -50,6 +51,9 @@ def build_tools(ctx: ToolContext) -> ToolSet:
     # Pi: harness de codigo externo, so quando ligado no config.
     if ctx.pi is not None and getattr(ctx.pi, "enabled", False):
         tools.add(*build_pi_tools())
+    # X: publicar exige credencial no cofre; sem ela a ferramenta nem aparece.
+    if ctx.x is not None and getattr(ctx.x, "enabled", False):
+        tools.add(*build_x_tools())
     return tools
 
 
