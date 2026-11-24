@@ -162,6 +162,8 @@ class OrchestratorTarget:
             return []
         status = getattr(self.orch, "bot_status", None)
         atual = self._mode_key()
+        nao_lidos = self._unread()
+        ocupado = self._bot_busy(atual)
         resultado: list[dict[str, Any]] = []
         for bot in listar():
             disponivel, motivo = (
@@ -177,6 +179,9 @@ class OrchestratorTarget:
                     "current": bot.id == atual,
                     "available": bool(disponivel),
                     "reason": motivo,
+                    # Badge do rail e indicador de "rodando" (fase 2).
+                    "unread": int(nao_lidos.get(bot.id, 0)),
+                    "busy": bool(ocupado and bot.id == atual),
                 }
             )
         return resultado
@@ -223,6 +228,47 @@ class OrchestratorTarget:
     def select_mode(self, key: str) -> list[str]:
         """Alias antigo de `/bot/select` (mesmo registry, mesma validacao)."""
         return self.select_bot(key)
+
+    # -------------------------------------------------------- feed/atividade
+    def activity(self, limit: int = 50, bot: str = "") -> dict[str, Any]:
+        """Feed de atividade (mensagens + runs) de um bot ou de todos.
+
+        Leitura pura: a tela usa para o card do aside e o badge do rail. Motor
+        antigo responde 503 pela rota (metodo opcional).
+        """
+        ler = getattr(self.orch, "bot_activity", None)
+        if not callable(ler):
+            raise RuntimeError("atividade dos bots indisponivel neste motor")
+        return dict(ler(limit=limit, bot=bot) or {})
+
+    def mark_seen(self, bot: str = "") -> dict[str, Any]:
+        """`POST /bots/seen`: zera o nao-lido (`bot` vazio = todos)."""
+        marcar = getattr(self.orch, "bot_seen", None)
+        if not callable(marcar):
+            raise RuntimeError("feed dos bots indisponivel neste motor")
+        return dict(marcar(bot) or {})
+
+    def _unread(self) -> dict[str, int]:
+        """Nao-lidos por bot, sem exigir o metodo novo (rail nunca quebra)."""
+        store = getattr(self.orch, "store", None)
+        ler = getattr(store, "unread_by_bot", None)
+        if not callable(ler):
+            return {}
+        try:
+            return dict(ler() or {})
+        except Exception as exc:  # pragma: no cover - banco indisponivel
+            logger.warning("nao-lidos dos bots falhou: %s", exc)
+            return {}
+
+    def _bot_busy(self, bot_id: str) -> bool:
+        """O bot ativo esta com um turno? (indicador do rail)"""
+        consultar = getattr(self.orch, "bot_busy", None)
+        if callable(consultar):
+            try:
+                return bool(consultar(bot_id))
+            except Exception:  # pragma: no cover - defensivo
+                pass
+        return self.ocupado
 
     # --------------------------------------------------------------- sessoes
     def open_session(self, conversation_id: int) -> list[str]:

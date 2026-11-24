@@ -517,3 +517,53 @@ def test_select_bot_recusa_com_turno_em_andamento(loop):
     alvo.turn("primeiro")
     with pytest.raises(MotorOcupado):
         alvo.select_bot("donna")
+
+
+# ------------------------------------------------------- atividade (fase 2) ---
+
+
+class ActivityOrch(BotsOrch):
+    """Motor falso com feed de atividade (mensagens + runs)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mensagens_descobertas: list[str] = []
+
+    def bot_activity(self, limit: int = 30, bot: str = "") -> dict[str, Any]:
+        mensagens = [
+            {"id": 1, "bot": "donna", "kind": "job", "title": "Capitulo",
+             "text": "ok", "when": "2026-11-25T10:00:00", "seen": False},
+        ]
+        if bot:
+            mensagens = [item for item in mensagens if item["bot"] == bot]
+        return {
+            "messages": mensagens[:limit],
+            "runs": [],
+            "unread": {"donna": 1},
+        }
+
+    def bot_seen(self, bot: str = "") -> dict[str, Any]:
+        self.mensagens_descobertas.append(bot)
+        return {"ok": True, "unread": {}}
+
+
+def test_activity_e_mark_seen_chegam_ao_orquestrador(loop):
+    orch = ActivityOrch()
+    alvo = OrchestratorTarget(orch, RemoteUI())
+    alvo.attach_loop(loop)
+
+    dados = alvo.activity(5, "donna")
+    assert dados["messages"][0]["bot"] == "donna"
+    assert alvo.mark_seen("donna") == {"ok": True, "unread": {}}
+    assert orch.mensagens_descobertas == ["donna"]
+
+
+def test_activity_em_motor_antigo_levanta_runtime_error():
+    class Antigo(FakeOrch):
+        pass
+
+    alvo = OrchestratorTarget(Antigo(), RemoteUI())
+    with pytest.raises(RuntimeError):
+        alvo.activity()
+    with pytest.raises(RuntimeError):
+        alvo.mark_seen()

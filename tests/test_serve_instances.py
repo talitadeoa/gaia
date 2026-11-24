@@ -28,6 +28,7 @@ class FakeTarget:
         self.modo = "gaia"
         self.abriu: list[int] = []
         self.novas = 0
+        self.vistos: list[str] = []
 
     def health(self) -> dict[str, Any]:
         return {
@@ -107,6 +108,30 @@ class FakeTarget:
             {"role": "user", "text": "oi"},
             {"role": "assistant", "text": "olá"},
         ]
+
+    # feed de atividade (fase 2) -----------------------------------------
+    def activity(self, limit: int = 50, bot: str = "") -> dict[str, Any]:
+        mensagens = [
+            {"id": 2, "bot": "donna", "kind": "job", "title": "Capitulo 2",
+             "text": "revisado", "when": "2026-11-25T10:00:00", "seen": False},
+            {"id": 1, "bot": "ariana", "kind": "job", "title": "Carteira",
+             "text": "PETR4 +2%", "when": "2026-11-25T09:00:00", "seen": True},
+        ]
+        if bot:
+            mensagens = [item for item in mensagens if item["bot"] == bot]
+        return {
+            "messages": mensagens[:limit],
+            "runs": [
+                {"id": 7, "bot": "donna", "kind": "bot_task", "status": "completed",
+                 "automation": "user:revisao", "when": "2026-11-25T10:00:00",
+                 "detail": "ok", "error": ""},
+            ],
+            "unread": {"donna": 1},
+        }
+
+    def mark_seen(self, bot: str = "") -> dict[str, Any]:
+        self.vistos.append(bot)
+        return {"ok": True, "unread": {} if not bot else {"ariana": 1}}
 
 
 def _pedir(
@@ -540,3 +565,41 @@ def test_automations_e_engine_com_centro(tmp_path: Path):
         assert mesmo["model"] == corpo["model"]
     finally:
         srv.shutdown()
+
+
+# ------------------------------------------------------- atividade (fase 2) ---
+
+
+def test_bots_activity_devolve_o_feed_e_exige_credencial(servidor):
+    _, _, base, _ = servidor
+    assert _pedir(base, "GET", "/bots/activity")[0] == 401
+
+    status, corpo, _ = _pedir(base, "GET", "/bots/activity?limit=10", token="tok-chat")
+    assert status == 200
+    assert [m["bot"] for m in corpo["messages"]] == ["donna", "ariana"]
+    assert corpo["unread"] == {"donna": 1}
+    assert corpo["runs"][0]["bot"] == "donna"
+
+    # Filtro por bot: o card do aside mostra so o ativo.
+    status, corpo, _ = _pedir(
+        base, "GET", "/bots/activity?bot=ariana", token="tok-chat"
+    )
+    assert status == 200
+    assert [m["bot"] for m in corpo["messages"]] == ["ariana"]
+
+
+
+
+def test_bot_seen_zera_o_badge(servidor):
+    _, alvo, base, _ = servidor
+    status, corpo, _ = _pedir(
+        base, "POST", "/bots/seen", token="tok-chat", corpo={"bot": "donna"}
+    )
+    assert status == 200
+    assert corpo == {"ok": True, "unread": {"ariana": 1}}
+    assert alvo.vistos == ["donna"]
+
+    status, corpo, _ = _pedir(base, "POST", "/bots/seen", token="tok-chat", corpo={})
+    assert status == 200
+    assert corpo["unread"] == {}
+    assert alvo.vistos == ["donna", ""]

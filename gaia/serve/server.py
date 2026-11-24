@@ -91,6 +91,12 @@ class Target(Protocol):
     def select_bot(self, key: str) -> list[str]:
         """Troca o bot ativo. Opcional: alvo antigo responde 503."""
 
+    def activity(self, limit: int = 50, bot: str = "") -> dict[str, Any]:
+        """Feed de atividade dos bots (mensagens + runs). Opcional."""
+
+    def mark_seen(self, bot: str = "") -> dict[str, Any]:
+        """Zera o nao-lido do feed (``bot`` vazio = todos). Opcional."""
+
 
 def _opcional(target: Any, nome: str) -> Any:
     """Metodo opcional do `Target` (rota que so existe em motor de verdade).
@@ -395,8 +401,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if rota == "/bots":
             # Bots do registry: a mesma lista que `/modes` devolve por
-            # compatibilidade, com o estado de disponibilidade da maquina.
+            # compatibilidade, com o estado de disponibilidade da maquina, o
+            # badge de nao-lido e o indicador de rodando (rail do web).
             self._json(HTTPStatus.OK, {"bots": self._modes()})
+            return
+        if rota == "/bots/activity":
+            # Feed do painel: mensagens e execucoes recentes por bot. Leitura
+            # pura; 503 quando o motor nao expoe atividade (fake/alvo antigo).
+            self._atividade(parse_qs(url.query))
             return
         if rota == "/modes":
             self._json(HTTPStatus.OK, {"modes": self._modes()})
@@ -603,6 +615,24 @@ class _Handler(BaseHTTPRequestHandler):
                 {"ok": True, "model": slug, "messages": mensagens},
             )
             return
+        if rota == "/bots/seen":
+            # Badge do rail: {bot?: "ariana"}; vazio zera todos.
+            chave = str(corpo.get("bot") or corpo.get("id") or "").strip()
+            try:
+                resultado = self._marcar_visto(chave)
+            except RuntimeError as exc:
+                self._erro(
+                    HTTPStatus.SERVICE_UNAVAILABLE, "activity_unavailable", str(exc)
+                )
+                return
+            except Exception as exc:
+                logger.warning("marcar visto falhou: %s", exc)
+                self._erro(
+                    HTTPStatus.INTERNAL_SERVER_ERROR, "seen_failed", str(exc)
+                )
+                return
+            self._json(HTTPStatus.OK, resultado)
+            return
         if rota == "/bot/select":
             chave = str(corpo.get("id") or corpo.get("bot") or corpo.get("mode") or "").strip()
             if not chave:
@@ -800,6 +830,38 @@ class _Handler(BaseHTTPRequestHandler):
         if callable(funcao):
             return list(funcao(chave))
         return self._selecionar_modo(chave)
+
+    def _atividade(self, query: dict[str, list[str]]) -> None:
+        """GET /bots/activity: feed do painel (mensagens + runs)."""
+        funcao = _opcional(self.app.target, "activity")
+        if funcao is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "activity_unavailable",
+                "atividade dos bots indisponivel neste motor",
+            )
+            return
+        try:
+            limite = int((query.get("limit") or ["30"])[0])
+        except (TypeError, ValueError):
+            limite = 30
+        bot = str((query.get("bot") or [""])[0]).strip()
+        try:
+            dados = funcao(limite, bot)
+        except Exception as exc:
+            logger.warning("atividade dos bots falhou: %s", exc)
+            self._erro(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "activity_failed", str(exc)
+            )
+            return
+        self._json(HTTPStatus.OK, dados)
+
+    def _marcar_visto(self, bot: str) -> dict[str, Any]:
+        """`POST /bots/seen`: delega ao motor; 503 quando ele nao tem feed."""
+        funcao = _opcional(self.app.target, "mark_seen")
+        if funcao is None:
+            raise RuntimeError("feed dos bots indisponivel neste motor")
+        return dict(funcao(bot) or {})
 
     def _sessions(self) -> list[dict[str, Any]]:
         """Conversas do bot ativo (o cliente redesenha ao trocar de bot)."""
