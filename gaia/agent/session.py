@@ -22,6 +22,40 @@ def _message_chars(message: ChatMessage) -> int:
     return total
 
 
+@dataclass(frozen=True)
+class SessionPolicy:
+    """Restricao de capacidade de uma sessao (bot).
+
+    ``tools=None`` significa "todas as registradas" -- e o comportamento de
+    antes dos bots, preservado. ``directory`` e o cwd das ferramentas (bash,
+    pi); ``scope`` e o teto de leitura/escrita do filesystem. Os dois podem ser
+    diferentes: Donna escreve em ``~/dissertacao`` mas le em ``~/SecondBrain``.
+    """
+
+    tools: tuple[str, ...] | None = None
+    directory: str = ""
+    scope: str = ""
+    bot: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tools": list(self.tools) if self.tools is not None else None,
+            "directory": self.directory,
+            "scope": self.scope,
+            "bot": self.bot,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SessionPolicy:
+        tools = data.get("tools")
+        return cls(
+            tools=tuple(tools) if isinstance(tools, (list, tuple)) else None,
+            directory=str(data.get("directory") or ""),
+            scope=str(data.get("scope") or ""),
+            bot=str(data.get("bot") or ""),
+        )
+
+
 @dataclass
 class AgentSession:
     id: str
@@ -42,12 +76,16 @@ class AgentSession:
     usage_history: list[dict[str, int]] = field(default_factory=list)
     # Ferramentas liberadas no turno atual (None = todas).
     allowed_tools: set[str] | None = field(default=None, compare=False)
+    # Politica do bot (tools/diretorio/escopo). ``None`` = sem restricao
+    # adicional; as ferramentas seguem o catalogo do processo.
+    policy: SessionPolicy | None = field(default=None, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "title": self.title,
             "directory": self.directory,
+            "policy": self.policy.to_dict() if self.policy else None,
             "last_message_id": self.last_message_id,
             "created_at": self.created_at,
             "summary": self.summary,
@@ -65,7 +103,11 @@ class AgentSession:
             directory=str(data.get("directory") or ""),
             last_message_id=str(data.get("last_message_id") or ""),
             created_at=float(data.get("created_at") or time.time()),
-            summary=str(data.get("summary") or ""),
+            policy=(
+                SessionPolicy.from_dict(data["policy"])
+                if isinstance(data.get("policy"), dict)
+                else None
+            ),
             usage_last=dict(data.get("usage_last") or {}),
             usage_total=dict(data.get("usage_total") or {}),
             usage_history=[
