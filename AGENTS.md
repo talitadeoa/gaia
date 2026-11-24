@@ -57,7 +57,8 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 | `gaia/controller/prompt.py` | prompt em camadas (prefixo estável + bloco dinâmico) |
 | `gaia/controller/initiative.py` | lembretes e check-in proativo; `briefing.py` | briefings |
 | `gaia/controller/memory.py` | consolidação diária e sonho |
-| `gaia/memory/store.py` | SQLite (`gaia.db`, schema v6: conversations/turns/records/meta/reminders/**runs**) |
+| `gaia/controller/automation_builder.py` | frase -> automacao: slots (dia/hora/skill/entrega), confianca por regra e gravacao em `automations` |
+| `gaia/memory/store.py` | SQLite (`gaia.db`, schema v11: conversations/turns/records/meta/reminders/**runs**/automations/routines/backlog_items) |
 | `gaia/memory/consolidation.py`, `dream.py` | memória do dia e sonho |
 | `gaia/secondbrain/` | índice FTS5, frontmatter, notas, embeddings opcionais |
 | `gaia/briefing/compose.py` | texto dos briefings (manhã, meio-dia, noite) |
@@ -65,7 +66,8 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 | `gaia/interface/remote.py` | `RemoteUI`: serializa eventos para o serve (fan-out + histórico) |
 | `gaia/serve/server.py` | HTTP + SSE + `/control`; `app.py` | ponte `OrchestratorTarget`; `voice.py` | modo voz do web (microfone/STT do motor + audio do TTS); `control_api.py` | rotas do painel; `session.py` | nonces de cookie (chat e painel); `instances.py` | `instances.json` e sonda `/health`; `web.py`/`static/` | web (`shared.js` e comum as duas telas) |
 | `gaia/control/` | Control Center: `runs` (histórico), `skills`, `automations` (agenda + seed/load/retry), `routines` (rotinas contínuas: boot/laço/evento/varredura), `health`, `secrets`, `settings`, `providers`, `center` |
-| `gaia/controller/scheduler.py` | agendador único: lê `automations`, calcula `due()`, chama o handler da skill, faz retry e notifica falha |
+| `gaia/controller/scheduler.py` | agendador único: lê `automations`, calcula `due()`, chama o handler da skill, faz retry e notifica falha; despacha as `user:*` pela coluna `skill` |
+| `gaia/agent/tools/automations.py` | ferramenta `criar_automacao` (aprovação obrigatória; só existe com `cfg`+`store`) |
 | `gaia/controller/routines.py` | gate único (`_routine_on`) e "rodar agora" das rotinas contínuas; os laços dos mixins chamam por aqui |
 | `gaia/client/remote_client.py` | cliente `gaia --remote` |
 | `gaia/telegram/`, `whatsapp/`, `browser/` | canais e integrações |
@@ -305,6 +307,14 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
 - **Nova automação:** `controller/briefing.py` (janelas `*_at`/`*_until`) ou
   `controller/initiative.py` (lembretes/check-in); use `claim_meta` para
   garantir "uma vez por dia". Ex.: `_check_estudos` (cobra estudo atrasado).
+- **Novo alvo do `criar_automacao`:** a lista fechada é `SKILL_REQUIRES`/
+  `SKILL_NAMES` em `controller/automation_builder.py` (hoje `reminder`,
+  `agenda_summary`, `estudos_summary`) **mais** o par
+  `USER_SKILL_METHODS`/`_user_automation_*` em `controller/scheduler.py`. Sem os
+  dois lados a proposta grava uma linha `user:*` que o agendador não sabe
+  executar. A confiança é por regra (`score`: skill+verbo+hora+dias+entrega);
+  nunca peça ao modelo para "dar uma nota". Teste em
+  `tests/test_automation_builder.py` e `tests/test_scheduler.py`.
 - **Proteger branch no GitHub:** `scripts/branches-protegidas.sh` (usuário
   `talitadeoa`) aplica o ruleset `protege-branch-padrao` na branch padrao
   (`~DEFAULT_BRANCH`, cobre `main`/`master`): proibe `deletion` e
@@ -341,6 +351,11 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `if self.cfg.x.enabled:` antes de chamar a rotina, o checkbox do painel não tem
   efeito nenhum (o `if` ganha primeiro). O gate de config mora em
   `Routine.requires`; no laço só pode existir `_run_routine`/`_routine_on`.
+- **Automação `user:*` não existe no registry.** `automations.describe(cfg)`
+  só conhece as 7 do config; quem materializa as do chat é `load()`, lendo a
+  linha da tabela. Por isso `update()` valida com `find_loaded()` (não com
+  `find()`) e `enabled` vem da coluna — fixar `True` faria o painel mentir e o
+  agendador executar o que a pessoa pausou.
 - **Rotina não grava `run` a cada ciclo.** `_memory_loop` e `_proactive_loop`
   rodam a cada 30-60 s: registrar todo ciclo encheria a tabela `runs` e o Error
   Center passaria a mostrar falha de rotina que só não tinha nada a fazer. Só

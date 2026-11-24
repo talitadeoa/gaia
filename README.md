@@ -202,6 +202,20 @@ gaia --remote http://gaia:8787 ask "resuma o dia"
   registrado com `trigger=manual` e o resultado (ou o erro) aparece na hora; o
   botão mostra `rodando…` enquanto espera e responde 409 se o motor estiver num
   turno. Rodar uma rotina pausada é permitido: o clique é explícito.
+- **Automação pelo chat.** "toda sexta às 9h me lembre de estudar" cria uma
+  linha nova na tabela `automations` (id `user:*`) pela ferramenta
+  `criar_automacao`, que aparece no painel como qualquer outra e passa a ser
+  disparada pelo agendador no horário. Quem interpreta é
+  `controller/automation_builder.py`: parser de slots (dias, hora, skill alvo,
+  entrega, parâmetros) e **confiança medida por regras, não pelo modelo** —
+  alta (≥7) cria ativada, média (4–6) cria **pausada** e pede conferência no
+  painel, baixa (<4) não cria nada e pede para reformular. Na v1 as skills
+  alvo são `reminder` ("me lembre de X"), `agenda_summary` ("resumo da
+  agenda") e `estudos_summary` ("resumo dos estudos"). Guardas: a skill alvo
+  tem de estar ligada na config, o horário tem de ser HH:MM válido, no máximo
+  10 criações automáticas por dia e **nunca** edita nem apaga automação
+  existente (pedido repetido devolve a que já existe; pausar/editar é no
+  painel). Ver `docs/plans/2026-11-24-automacoes-pelo-chat.md`.
 - **Modo voz no web** (`🎙 voz`, aparece quando o servidor consegue transcrever).
   O microfone é o **de quem conversa**: o navegador grava WAV e manda em
   `POST /voice/upload`, e o motor transcreve com o faster-whisper local (o mini
@@ -322,7 +336,10 @@ O agendador é **único** e vive no `gaia serve` (mesmo processo que é dono do
 banco): a cada ciclo ele lê a tabela `automations`, calcula se a rotina está
 devida e chama o handler da skill. Não há cron do sistema nem APScheduler.
 Cada rotina mantém a reserva `claim_meta` como segunda barreira — o painel é a
-primeira, o banco continua impedindo entrega dupla se algo escapar.
+primeira, o banco continua impedindo entrega dupla se algo escapar. Além das
+rotinas do registry, o agendador despacha as automacoes criadas pelo chat
+(`user:*`) pela coluna `skill`: `reminder` entrega o texto, `agenda_summary`
+manda o resumo do dia e `estudos_summary` o progresso dos simulados.
 
 - **Retry:** falha de rede/desconhecido é tentada de novo com backoff
   exponencial até `retry_max` (padrão 2). `auth` e `config` **não** repetem: o
