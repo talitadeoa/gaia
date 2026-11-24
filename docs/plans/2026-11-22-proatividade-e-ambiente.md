@@ -124,7 +124,10 @@ noite, consolidação por LLM) falha com 402.
 - `getUpdates` do bot responde e **ninguém** faz polling no Mac: confirmado por
   chamada direta à API (`pending_update_count: 0`, sem 409).
 - `~/.local/bin/zmin` → `/Users/talita/zaya/scripts/zmin.sh` (diretório não
-  existe; o script real é `~/gaia/scripts/gmin.sh`).
+  existe; o script real é `~/gaia/scripts/gmin.sh`). **Corrigido em 2026-11-23**:
+  o link morto foi removido e `gmin` aponta para `~/gaia/scripts/gmin.sh`
+  (`~/.local/bin` está no `PATH`). O `~/.local/bin/zaya` (que chamava o pacote
+  `zaya`, já renomeado para `gaia`) também saiu; o comando é `.venv/bin/gaia`.
 - `.venv` tem `zaya_assistant` editable apontando para `file:///Users/talita/zaya`.
 
 ### 3.4 Mac: `serve` zumbi de sexta
@@ -237,7 +240,8 @@ ssh gaia 'mkdir -p ~/gaia-backups/proatividade-20261122 && \
   cp -a ~/.config/gaia/config.toml ~/.config/gaia/.env \
         ~/.local/share/gaia/gaia.db ~/gaia-backups/proatividade-20261122/'
 
-# corrigir o atalho do gmin (hoje aponta para ~/zaya/scripts/zmin.sh, que não existe)
+# corrigir o atalho do gmin (aplicado em 2026-11-23: o zmin morto saiu e o
+# gmin aponta para ~/gaia/scripts/gmin.sh; ~/.local/bin já está no PATH)
 ln -sf ~/gaia/scripts/gmin.sh ~/.local/bin/gmin
 
 gmin deploy --dry-run      # confere o que sobe
@@ -397,8 +401,10 @@ check-in) chega no Telegram com o mini sendo o único processo e o log sem
 
 ## 7. Pendências descobertas (não bloqueiam este plano)
 
-- `~/.local/bin/zmin` e `~/.local/bin/zaya` são links mortos/renomeados;
-  `gmin` não está no `PATH` (só o `zmin` quebrado).
+- ~~`~/.local/bin/zmin` e `~/.local/bin/zaya` são links mortos/renomeados;
+  `gmin` não está no `PATH` (só o `zmin` quebrado).~~ **Resolvido em
+  2026-11-23**: os dois links mortos saíram e `~/.local/bin/gmin` →
+  `~/gaia/scripts/gmin.sh`. O mini já tinha esse mesmo link desde 21/11.
 - `AGENTS.md` manda usar `gmin`, mas `scripts/gmin.sh` chama
   `gaia telegram serve` na unidade do mini — vale conferir se a unidade ativa
   ainda é a de 16/11 (`gaia-telegram.service` inativo, `gaia-serve` ativo).

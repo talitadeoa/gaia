@@ -26,7 +26,7 @@ estado atual. O status abaixo foi verificado no código.
 | [`plans/2026-11-16-gmin-admin.md`](plans/2026-11-16-gmin-admin.md) | parcial: `gmin.sh` tem doctor/logs/restart/deploy/test/agenda/ask/shell/sudo/serve; backup/restore/audit/fix não existem |
 | [`plans/2026-11-19-serve-cliente-fino.md`](plans/2026-11-19-serve-cliente-fino.md) | fases 1 e 2 implementadas (`gaia serve`, `--remote`, web); partes 2/3 são backlog |
 | [`plans/2026-11-20-handoff.md`](plans/2026-11-20-handoff.md) | diário de sessão; leia o "Estado operacional", mas confirme no ambiente |
-| [`plans/2026-11-22-proatividade-e-ambiente.md`](plans/2026-11-22-proatividade-e-ambiente.md) | **fase 0 aplicada** (`owns_telegram`, `_speak` mudo em `serve`); o resto (deploy no mini, `.zshrc`) é operacional e não está aplicado |
+| [`plans/2026-11-22-proatividade-e-ambiente.md`](plans/2026-11-22-proatividade-e-ambiente.md) | **fase 0 aplicada** (`owns_telegram`, `_speak` mudo em `serve`); atalhos `zmin`/`zaya` corrigidos em 2026-11-23; o deploy no mini é operacional (feito) e o `.zshrc` não foi |
 | [`plans/2026-11-22-web-instances-sessao-design.md`](plans/2026-11-22-web-instances-sessao-design.md) | implementado: `instances.json`, sessão de cookie no chat, seletor de instância e paridade com a TUI no web |
 | [`plans/2026-11-22-mac-cliente-fino.md`](plans/2026-11-22-mac-cliente-fino.md) | **plano ativo, não aplicado**: o que falta para o Mac virar cliente fino (TUI remota, `ui.confirm`, 12 eventos não desenhados, voz, trava de escrita). Inclui o dano da sobrescrita silenciosa do Second Brain |
 | [`plans/2026-11-22-agent-control-center-design.md`](plans/2026-11-22-agent-control-center-design.md) | implementado (fases A e B): Control Center em `/control`, `gaia/control/`, schema v6 (`runs`) |
