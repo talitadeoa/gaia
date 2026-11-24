@@ -259,6 +259,19 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `/tmp/fake_serve.py` (Target falso + `ServeServer`) serve; os contratos
   estáveis (id duplicado, seletor inexistente, catálogo) estão em
   `tests/test_serve_web.py`.
+- **Tema da tela (claro/escuro/sistema):** uma fonte de verdade só, o módulo
+  `tema` de `shared.js` (`window.Gaia.tema`): ele lê/grava `localStorage`
+  (`gaia.tema`: `sistema`/`escuro`/`claro`), resolve `sistema` por
+  `matchMedia` e escreve `data-tema="escuro"|"claro"` no `<html>`. O CSS
+  **não** usa `@media (prefers-color-scheme)` — a paleta é `:root` (Mocha) e
+  `:root[data-tema="claro"]` (Latte), em `index.html` e `control.css`. Cada
+  página repete a resolução num `<script>` inline mínimo no `<head>`, antes do
+  `<style>`/`<link>`, senão a primeira pintura pisca escura. Cor nova na tela
+  entra como token (`--warn`, `--backdrop`…), nunca como hex solto; no Latte as
+  cores puras da Catppuccin não passam AA sobre o creme (verde `#40a02b` dá
+  ~3:1), por isso `--accent`/`--warn`/`--err` são versões escurecidas. Testes:
+  `tests/test_serve_web.py::test_tema_claro_escuro_no_html` e
+  `::test_tema_no_painel_e_no_shared`.
 - **Audiobook:** lógica em `gaia/audiobook/` (testes em `tests/test_audiobook.py`,
   com o sintetizador stubado — nada de rede). Entrada nova (outro formato) é em
   `extract.py`; regra de limpeza, em `normalize.py`; o cmd `/audiobook` está em

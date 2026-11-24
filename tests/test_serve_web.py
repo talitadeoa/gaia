@@ -339,6 +339,55 @@ def test_paleta_de_comandos_no_html():
         assert f'"{tecla}"' in texto
 
 
+def test_tema_claro_escuro_no_html():
+    """Tema do web: botao no header, `data-tema` no <html> e paleta unica.
+
+    O contrato que nao pode voltar atras: o CSS NAO fala de
+    `prefers-color-scheme` (quem resolve "sistema" e o JS, senao a paleta tem
+    duas fontes de verdade e o botao mente sobre o que esta na tela), a
+    resolucao acontece no <head> antes da primeira pintura (senao a tela pisca
+    escura ao abrir em tema claro) e o mesmo botao existe nas duas telas.
+    """
+    texto, coletor = _html()
+    assert "btn-tema" in coletor.ids
+    assert 'tema.montar($("#btn-tema"))' in texto
+    # Resolucao antes do <style>: nada de flash de tema errado.
+    cabeca = texto.split("<style>", 1)[0]
+    assert 'localStorage.getItem("gaia.tema")' in cabeca
+    assert "document.documentElement.dataset.tema" in cabeca
+    # A paleta e declarada por atributo, nao por media query.
+    assert ':root[data-tema="claro"]' in texto
+    assert "@media (prefers-color-scheme" not in texto
+    # Catppuccin: Mocha no escuro, Latte no claro.
+    for cor in ("#11111b", "#1e1e2e", "#cdd6f4", "#e6e9ef", "#eff1f5", "#4c4f69"):
+        assert cor in texto
+    # O botao primario le o token de "texto sobre o accent" (o Latte precisa de
+    # branco; o Mocha, do crust) em vez do verde fixo do escuro.
+    assert "color: var(--on-accent)" in texto
+
+
+def test_tema_no_painel_e_no_shared():
+    """O Control Center tem o mesmo botao e o modulo `tema` e compartilhado."""
+    from gaia.serve import web
+
+    painel = (RAIZ / "gaia" / "serve" / "static" / "control.html").read_text(encoding="utf-8")
+    assert 'id="btn-tema"' in painel
+    assert 'localStorage.getItem("gaia.tema")' in painel
+    css = (RAIZ / "gaia" / "serve" / "static" / "control.css").read_text(encoding="utf-8")
+    assert ':root[data-tema="claro"]' in css
+    assert "@media (prefers-color-scheme" not in css
+    js_painel = (RAIZ / "gaia" / "serve" / "static" / "control.js").read_text(encoding="utf-8")
+    assert 'tema.montar($("#btn-tema"))' in js_painel
+
+    bruto, _ = web.static_asset("shared.js")  # type: ignore[misc]
+    js = bruto.decode("utf-8")
+    assert "const tema" in js and "tema," in js
+    assert 'const CHAVE_TEMA = "gaia.tema"' in js
+    # Tres escolhas, com "sistema" seguindo o aparelho ao vivo.
+    assert 'const TEMAS = ["sistema", "escuro", "claro"]' in js
+    assert "addEventListener(\"change\", aoTrocar)" in js
+
+
 def test_icone_da_gaia_nas_duas_telas():
     """O mesmo PNG e o favicon do chat e do painel (sem arquivo duplicado)."""
     from gaia.serve import web

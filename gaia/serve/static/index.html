@@ -6,15 +6,62 @@
 <meta name="color-scheme" content="dark light">
 <link rel="icon" type="image/png" href="/static/icon.png">
 <title>Gaia</title>
+<script>
+/* Tema antes da primeira pintura: sem isto a tela nasce escura e pisca ao
+ * aplicar o claro. A regra de verdade mora em `shared.js` (`window.Gaia.tema`)
+ * — aqui e so a mesma resolucao, minima, porque o CSS ainda nao carregou. */
+(function () {
+  var escolha = "sistema";
+  try {
+    var salvo = localStorage.getItem("gaia.tema");
+    if (salvo === "claro" || salvo === "escuro" || salvo === "sistema") escolha = salvo;
+  } catch (_) { /* storage bloqueado: segue o aparelho */ }
+  var escuro = true;
+  try { escuro = window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (_) {}
+  var paleta = escolha === "sistema" ? (escuro ? "escuro" : "claro") : escolha;
+  document.documentElement.dataset.tema = paleta;
+  document.documentElement.dataset.temaEscolha = escolha;
+})();
+</script>
 <style>
+  /* Paleta Catppuccin: Mocha (escuro, padrao) e Latte (claro).
+     No Latte, `--accent`/`--warn`/`--err` sao as cores da Catppuccin
+     escurecidas ate passarem AA sobre `--panel`/`--panel2` (as puras — verde
+     #40a02b, amarelo #df8e1d — ficam em ~2.3:1 sobre o creme).
+     O JS escreve `data-tema` no <html>; nada aqui fala de `prefers-color-scheme`
+     para nao haver duas fontes de verdade sobre qual paleta esta na tela. */
   :root {
-    --bg: #0f1216; --panel: #161b22; --panel2: #1c232c; --line: #2a3340;
-    --fg: #e6edf3; --dim: #8b98a5; --accent: #7cc7a0; --warn: #e3b341;
-    --err: #f2777a; --user: #2b3a4a; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme: dark;   /* scrollbar e controles nativos acompanham a paleta */
+    --bg: #11111b;        /* crust */
+    --panel: #1e1e2e;     /* base */
+    --panel2: #313244;    /* surface0 */
+    --line: #45475a;      /* surface1 */
+    --fg: #cdd6f4;        /* text */
+    --dim: #a6adc8;       /* subtext0 */
+    --accent: #a6e3a1;    /* green */
+    --warn: #f9e2af;      /* yellow */
+    --err: #f38ba8;       /* red */
+    --user: #313953;      /* base + blue 14% (a bolha de quem fala) */
+    --on-accent: #11111b; /* texto sobre o verde */
+    --backdrop: rgba(17, 17, 27, .72);
+    --sombra: rgba(17, 17, 27, .55);
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  @media (prefers-color-scheme: light) {
-    :root { --bg:#f6f7f9; --panel:#fff; --panel2:#eef1f5; --line:#d8dee6; --fg:#1b2126;
-            --dim:#5a6a78; --accent:#1f7a55; --user:#dfe9f3; }
+  :root[data-tema="claro"] {
+    color-scheme: light;
+    --bg: #e6e9ef;        /* mantle */
+    --panel: #eff1f5;     /* base */
+    --panel2: #dce0e8;    /* crust */
+    --line: #bcc0cc;      /* surface1 */
+    --fg: #4c4f69;        /* text */
+    --dim: #5c5f77;       /* subtext1 */
+    --accent: #276a1c;    /* green escurecido (AA) */
+    --warn: #7d5700;      /* yellow escurecido (AA) */
+    --err: #b3122f;       /* red escurecido (AA) */
+    --user: #d6e0f5;      /* base + blue 12% */
+    --on-accent: #ffffff;
+    --backdrop: rgba(76, 79, 105, .38);
+    --sombra: rgba(76, 79, 105, .22);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -150,7 +197,7 @@
     color: var(--fg); padding: 8px 14px; cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
-  button.primario { background: var(--accent); color: #06110b; border-color: var(--accent); font-weight: 600; }
+  button.primario { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
   button.perigo { color: var(--err); }
   button:disabled { opacity: .5; cursor: default; }
   .dica { font-size: 12px; color: var(--dim); }
@@ -167,7 +214,7 @@
   .hit.aberto p { display: block; }
   dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--fg);
            padding: 20px; max-width: 480px; width: calc(100% - 40px); }
-  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog::backdrop { background: var(--backdrop); }
   dialog h2 { margin: 0 0 6px; font-size: 16px; }
   dialog p { color: var(--dim); font-size: 13px; margin: 0 0 12px; }
   dialog input:not([type=checkbox]) { width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line);
@@ -182,7 +229,7 @@
     position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
     max-height: 40vh; overflow-y: auto; background: var(--panel);
     border: 1px solid var(--line); border-radius: 12px; padding: 6px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, .35); z-index: 20;
+    box-shadow: 0 12px 32px var(--sombra); z-index: 20;
   }
   #comandos[hidden] { display: none; }
   #comandos ul { list-style: none; margin: 0; padding: 0; }
@@ -323,6 +370,8 @@
   <button id="btn-nova" class="pill" type="button" title="comecar uma conversa nova">+ nova</button>
   <button id="btn-idiomas" class="pill" type="button"
           title="idiomas do eco: escolher o idioma da tradução de cada mensagem" hidden>idiomas</button>
+  <button id="btn-tema" class="pill" type="button"
+          title="tema da tela: claro, escuro ou o do sistema">tema</button>
   <button id="btn-voz" class="pill voz" type="button"
           title="modo voz: fala com a Gaia pelo microfone deste servidor" hidden>🎙 voz</button>
   <button id="abortar" class="perigo" title="encerra o turno atual" disabled>parar</button>
@@ -451,7 +500,7 @@
 <script src="/static/shared.js"></script>
 <script>
 "use strict";
-const { api, auth, header, instances, texto } = window.Gaia;
+const { api, auth, header, instances, texto, tema } = window.Gaia;
 const $ = (sel) => document.querySelector(sel);
 const chat = $("#chat");
 const entrada = $("#entrada");
@@ -2910,6 +2959,7 @@ $("#btn-sessoes").addEventListener("click", abrirSessoes);
 $("#nova-sessao").addEventListener("click", novaSessao);
 $("#btn-nova").addEventListener("click", novaSessao);
 $("#btn-idiomas").addEventListener("click", abrirIdiomas);
+tema.montar($("#btn-tema"));
 $("#idiomas-desligar").addEventListener("click", desligarIdiomas);
 $("#btn-voz").addEventListener("click", alternarVoz);
 $("#trocar-token").addEventListener("click", () => abrirLogin());

@@ -6,6 +6,15 @@
  *   - `api`       : fetch same-origin com cookie, `Bearer` opcional e erro tipado
  *   - `instances` : lista de `instances.json`, seletor no header e troca de máquina
  *   - `header`    : pinta instância/modelo/provedor/chave mascarada/modo
+ *   - `tema`      : claro/escuro/sistema (Catppuccin Latte e Mocha), no <html>
+ *
+ * O tema e a excecao a regra "segredo nao fica no navegador": ele nao e
+ * credencial, e preferencia de quem esta olhando a tela, entao mora no
+ * `localStorage` (`gaia.tema`) e vale para o chat e o painel no mesmo
+ * navegador. O CSS so conhece `data-tema="claro"` e `data-tema="escuro"`:
+ * quem resolve "sistema" e este modulo (`matchMedia`), para a paleta existir
+ * uma vez so em cada arquivo. O `<head>` das duas paginas repete a resolucao
+ * num script inline minimo — sem ele a primeira pintura sai na paleta escura.
  *
  * Regra de credencial (a mesma nos dois lados):
  *   1. O token (`GAIA_SERVE_TOKEN` no chat, `GAIA_CONTROL_TOKEN` no painel) só é
@@ -273,5 +282,103 @@
     },
   };
 
-  window.Gaia = { api, auth, el, header, instances, texto };
+  /* --------------------------------------------------------------------- tema */
+  /** Preferencia de tema: `sistema` (segue o aparelho), `escuro` ou `claro`. */
+  const CHAVE_TEMA = "gaia.tema";
+  const TEMAS = ["sistema", "escuro", "claro"];
+  const ROTULOS = { sistema: "sistema", escuro: "escuro", claro: "claro" };
+
+  /** O aparelho esta em modo escuro agora? (sem `matchMedia`, assume escuro) */
+  function aparelhoEscuro() {
+    if (typeof window.matchMedia !== "function") return true;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+
+  const tema = {
+    chave: CHAVE_TEMA,
+    opcoes: TEMAS,
+
+    /** Escolha salva (`sistema` quando nao ha nada, ou lixo no storage). */
+    escolhido() {
+      try {
+        const salvo = texto(localStorage.getItem(CHAVE_TEMA)).toLowerCase();
+        return TEMAS.includes(salvo) ? salvo : "sistema";
+      } catch (_) {
+        // storage bloqueado (modo privado, politica): a tela ainda funciona.
+        return "sistema";
+      }
+    },
+
+    /** Paleta efetiva para uma escolha: `sistema` vira `escuro` ou `claro`. */
+    paleta(escolha = tema.escolhido()) {
+      if (escolha === "claro" || escolha === "escuro") return escolha;
+      return aparelhoEscuro() ? "escuro" : "claro";
+    },
+
+    /** Aplica no `<html>` (`data-tema`) e devolve a escolha usada. */
+    aplicar(escolha) {
+      const usado = TEMAS.includes(texto(escolha)) ? texto(escolha) : tema.escolhido();
+      const raiz = document.documentElement;
+      raiz.dataset.tema = tema.paleta(usado);
+      raiz.dataset.temaEscolha = usado;
+      return usado;
+    },
+
+    /** Grava a escolha (`sistema` apaga a chave) e aplica na hora. */
+    definir(escolha) {
+      const usado = TEMAS.includes(texto(escolha)) ? texto(escolha) : "sistema";
+      try {
+        if (usado === "sistema") localStorage.removeItem(CHAVE_TEMA);
+        else localStorage.setItem(CHAVE_TEMA, usado);
+      } catch (_) {
+        /* sem storage: a escolha vale so nesta pagina, o que ja e melhor que nada */
+      }
+      return tema.aplicar(usado);
+    },
+
+    /** Proxima escolha do ciclo do botao: sistema -> escuro -> claro -> sistema. */
+    proximo(escolha = tema.escolhido()) {
+      const atual = TEMAS.indexOf(escolha);
+      return TEMAS[(atual < 0 ? 0 : atual + 1) % TEMAS.length];
+    },
+
+    /** Texto/titulo do botao do header ("tema · claro", "tema · sistema"…). */
+    rotulo(escolha = tema.escolhido()) {
+      return "tema · " + (ROTULOS[escolha] || ROTULOS.sistema);
+    },
+
+    /**
+     * Liga um botao do header ao ciclo de temas. Idempotente: o header das duas
+     * telas e estatico, entao cada botao e montado uma vez so.
+     */
+    montar(botao) {
+      if (!botao) return null;
+      const pintar = (escolha) => {
+        botao.textContent = tema.rotulo(escolha);
+        botao.title =
+          "tema da tela: " + ROTULOS[escolha]
+          + " (clique para alternar sistema, escuro e claro)";
+        botao.dataset.escolha = escolha;
+      };
+      const escolha = tema.aplicar(tema.escolhido());
+      pintar(escolha);
+      botao.addEventListener("click", () => pintar(tema.definir(tema.proximo())));
+      // "sistema" precisa acompanhar o aparelho AO VIVO (o SO troca sozinho no
+      // fim da tarde); so vale quando a escolha ainda e `sistema`.
+      if (typeof window.matchMedia === "function") {
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const aoTrocar = () => {
+          if (tema.escolhido() === "sistema") tema.aplicar("sistema");
+        };
+        if (typeof media.addEventListener === "function") {
+          media.addEventListener("change", aoTrocar);
+        } else if (typeof media.addListener === "function") {
+          media.addListener(aoTrocar); // Safari antigo, sem `addEventListener`
+        }
+      }
+      return botao;
+    },
+  };
+
+  window.Gaia = { api, auth, el, header, instances, tema, texto };
 })();

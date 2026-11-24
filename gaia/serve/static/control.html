@@ -6,6 +6,22 @@
 <meta name="color-scheme" content="dark light">
 <link rel="icon" type="image/png" href="/static/icon.png">
 <title>Gaia — Control Center</title>
+<script>
+/* Tema antes da primeira pintura (a regra de verdade e `Gaia.tema` no
+ * shared.js). Sem este bloco a paleta escura pisca antes do claro aplicar. */
+(function () {
+  var escolha = "sistema";
+  try {
+    var salvo = localStorage.getItem("gaia.tema");
+    if (salvo === "claro" || salvo === "escuro" || salvo === "sistema") escolha = salvo;
+  } catch (_) { /* storage bloqueado: segue o aparelho */ }
+  var escuro = true;
+  try { escuro = window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (_) {}
+  var paleta = escolha === "sistema" ? (escuro ? "escuro" : "claro") : escolha;
+  document.documentElement.dataset.tema = paleta;
+  document.documentElement.dataset.temaEscolha = escolha;
+})();
+</script>
 <link rel="stylesheet" href="/control/static/control.css">
 </head>
 <body>
@@ -19,6 +35,8 @@
   <span id="status">informe o token para carregar</span>
   <a class="pill" href="/" title="voltar para o chat">chat</a>
   <button id="btn-token" class="pill" type="button">token</button>
+  <button id="btn-tema" class="pill" type="button"
+          title="tema da tela: claro, escuro ou o do sistema">tema</button>
   <button id="btn-refresh" class="pill" type="button">atualizar</button>
 </header>
 

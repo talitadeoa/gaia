@@ -1,12 +1,39 @@
-/* Control Center — mesmas variaveis de cor do chat (identidade unica). */
+/* Control Center — paleta Catppuccin do chat (Mocha/Latte, mesma identidade).
+ *
+ * O tema e do navegador, nao do servidor: `shared.js` (`window.Gaia.tema`)
+ * resolve claro/escuro/sistema e escreve `data-tema` no <html>. Aqui so se
+ * declara a paleta; se este CSS falhar em carregar, o chat continua com a dele.
+ */
 :root {
-  --bg: #0f1216; --panel: #161b22; --panel2: #1c232c; --line: #2a3340;
-  --fg: #e6edf3; --dim: #8b98a5; --accent: #7cc7a0; --warn: #e3b341;
-  --err: #f2777a; --user: #2b3a4a; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+  --bg: #11111b;        /* crust */
+  --panel: #1e1e2e;     /* base */
+  --panel2: #313244;    /* surface0 */
+  --line: #45475a;      /* surface1 */
+  --fg: #cdd6f4;        /* text */
+  --dim: #a6adc8;       /* subtext0 */
+  --accent: #a6e3a1;    /* green */
+  --warn: #f9e2af;      /* yellow */
+  --err: #f38ba8;       /* red */
+  --user: #313953;      /* base + blue 14% */
+  --on-accent: #11111b;
+  --backdrop: rgba(17, 17, 27, .72);
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-@media (prefers-color-scheme: light) {
-  :root { --bg:#f6f7f9; --panel:#fff; --panel2:#eef1f5; --line:#d8dee6; --fg:#1b2126;
-          --dim:#5a6a78; --accent:#1f7a55; --warn:#8a6100; --err:#b3261e; --user:#dfe9f3; }
+:root[data-tema="claro"] {
+  color-scheme: light;
+  --bg: #e6e9ef;        /* mantle */
+  --panel: #eff1f5;     /* base */
+  --panel2: #dce0e8;    /* crust */
+  --line: #bcc0cc;      /* surface1 */
+  --fg: #4c4f69;        /* text */
+  --dim: #5c5f77;       /* subtext1 */
+  --accent: #276a1c;    /* green escurecido (AA sobre o creme) */
+  --warn: #7d5700;      /* yellow escurecido */
+  --err: #b3122f;       /* red escurecido */
+  --user: #d6e0f5;      /* base + blue 12% */
+  --on-accent: #ffffff;
+  --backdrop: rgba(76, 79, 105, .38);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
@@ -112,7 +139,7 @@ details pre {
   padding: 8px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap;
 }
 
-.modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 18px; z-index: 20; }
+.modal { position: fixed; inset: 0; background: var(--backdrop); display: grid; place-items: center; padding: 18px; z-index: 20; }
 .modal[hidden] { display: none; }
 .modal-box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; max-width: 520px; width: 100%; }
 .modal-box h2 { margin: 0 0 8px; font-size: 16px; }

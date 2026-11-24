@@ -16,7 +16,7 @@
 (() => {
   "use strict";
 
-  const { api: apiCompartilhada, auth, header, instances } = window.Gaia;
+  const { api: apiCompartilhada, auth, header, instances, tema } = window.Gaia;
   const API = "/control/api";
   const estado = { aba: "overview", dados: {}, sessao: false, engine: null };
 
@@ -793,6 +793,7 @@
     botao.addEventListener("click", () => trocarAba(botao.dataset.tab));
   });
   $("#btn-token").addEventListener("click", abrirModal);
+  tema.montar($("#btn-tema"));
   $("#btn-refresh").addEventListener("click", carregar);
   $("#btn-close-modal").addEventListener("click", fecharModal);
   $("#btn-save-token").addEventListener("click", async () => {

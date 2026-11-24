@@ -168,10 +168,15 @@ gaia --remote http://gaia:8787 ask "resuma o dia"
   as próximas automações. Digitar `/` abre a paleta de comandos (mesmo catálogo
   da ajuda do terminal, filtrada enquanto se digita; Tab/Enter completam, Esc
   fecha) e `/ajuda` imprime a lista no chat. O header tem `+ nova` (sessão
-  nova), `sessões` (conversas anteriores) e `idiomas` (abre o dialog com os
+  nova), `sessões` (conversas anteriores), `idiomas` (abre o dialog com os
   idiomas do eco: 中文, English e Français; escolher um liga a tradução embaixo
   de cada mensagem e `desligar o eco` desliga — o mesmo `/chines` da TUI,
-  estado do processo, não do TOML). `GET /languages` devolve a lista
+  estado do processo, não do TOML) e `tema` (cicla **sistema → escuro →
+  claro**; a escolha fica no `localStorage` do navegador e vale para o chat e
+  o `/control`). A paleta é Catppuccin: **Mocha** no escuro e **Latte** no
+  claro. Em "sistema" a página acompanha a troca do aparelho ao vivo
+  (`prefers-color-scheme`), e a resolução acontece no `<head>` antes da
+  primeira pintura — sem piscar escuro ao abrir. `GET /languages` devolve a lista
   (`key`/`label`/`code`/`current`/`enabled`) e `POST /language` com
   `{"key": "en"}` escolhe/liga (ou `"enabled": false` desliga). O idioma do
   eco também fica em `[interface] echo_language` (`GAIA_ECHO_LANGUAGE`,
