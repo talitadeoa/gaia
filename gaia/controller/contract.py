@@ -238,6 +238,10 @@ class OrchestratorContract(ABC):
         ...
 
     @abstractmethod
+    async def _say_proactive(self, text: str, count: bool = True) -> None:
+        ...
+
+    @abstractmethod
     def _start_speech_streaming(self) -> bool:
         ...
 

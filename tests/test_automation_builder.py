@@ -214,7 +214,8 @@ def test_sem_horario_nao_cria(cfg, store):
     resultado = propose_automation(
         "toda sexta me lembre de estudar", cfg, store, now=SEGUNDA
     )
-    assert resultado.status == "refused"
+    assert resultado.status == "reformulate"
+    assert resultado.action == "ask"
     assert "horario" in resultado.message.lower()
     assert store.list_automations() == []
 
@@ -223,7 +224,9 @@ def test_horario_invalido_nao_cria(cfg, store):
     resultado = propose_automation(
         "toda sexta as 25h me lembre de estudar", cfg, store, now=SEGUNDA
     )
-    assert resultado.status == "refused"
+    # 25h nao casa nenhum formato: o horario fica vazio e a resposta pede de
+    # novo em vez de inventar 01:00.
+    assert resultado.status == "reformulate"
     assert store.list_automations() == []
 
 
@@ -411,3 +414,16 @@ def test_ferramenta_sem_pedido_falha(tmp_path, cfg, store):
     assert ferramenta is not None
     resultado = ferramenta.handler({}, ToolContext(tmp_path, cfg=cfg, store=store))
     assert resultado.ok is False
+
+
+def test_agent_client_liga_a_ferramenta_ao_banco(tmp_path, cfg, store):
+    """O AgentClient nasce antes do store: a ferramenta entra em set_memory_store."""
+    from gaia.agent.runtime import AgentClient
+
+    client = AgentClient(cfg, tmp_path / "proj")
+    assert "criar_automacao" not in client.tools.names()
+    client.set_memory_store(store)
+    assert "criar_automacao" in client.tools.names()
+    # Idempotente: chamar de novo (todo bootstrap) nao duplica.
+    client.set_memory_store(store)
+    assert client.tools.names().count("criar_automacao") == 1

@@ -263,9 +263,9 @@ def _time_match(text: str) -> tuple[tuple[int, int] | None, tuple[int, int] | No
                 hora += 12
             return (hora, minuto), match.span()
     for regex, hora in ((_NOON_RE, 12), (_MIDNIGHT_RE, 0)):
-        match = regex.search(norm)
-        if match:
-            return (hora, 0), match.span()
+        achado = regex.search(norm)
+        if achado:
+            return (hora, 0), achado.span()
     return None, None
 
 
@@ -470,19 +470,6 @@ def _slug(text: str) -> str:
     return base[:40].strip("-") or "automacao"
 
 
-def _existing_id(skill: str, store: MemoryStore) -> str:
-    """Id livre ``user:<slug>`` (nunca reaproveita o de outra automacao)."""
-    existentes = {linha["id"] for linha in store.list_automations()}
-    raiz = f"user:{_slug(SKILL_NAMES.get(skill, skill))}"
-    if raiz not in existentes:
-        return raiz
-    for indice in range(2, 100):
-        candidato = f"{raiz}-{indice}"
-        if candidato not in existentes:
-            return candidato
-    return f"{raiz}-{datetime.now().strftime('%H%M%S')}"
-
-
 def _same_automation(
     skill: str,
     days: tuple[int, ...],
@@ -616,19 +603,28 @@ def propose_automation(
             params=params,
         )
 
-    # 1) sem os dois slots essenciais nao ha automacao segura.
+    # 1) slot essencial que falta -> pede para reformular (nao e recusa:
+    # a pessoa so nao disse tudo o que o parser precisa).
     if not skill:
         return recusar(
             "Ainda nao sei o que a automacao deve fazer. Diga se e um lembrete "
-            "(\"me lembre de X\"), um resumo da agenda ou um resumo de estudos."
+            "(\"me lembre de X\"), um resumo da agenda ou um resumo de estudos.",
+            status="reformulate",
+            action="ask",
         )
     if not at:
-        return recusar("Falta o horario. Diga algo como \"toda sexta as 9h\".")
+        return recusar(
+            "Falta o horario. Diga algo como \"toda sexta as 9h\".",
+            status="reformulate",
+            action="ask",
+        )
     if not 0 <= int(at[:2]) <= 23 or not 0 <= int(at[3:]) <= 59:
         return recusar(f"Horario invalido: {at}. Use HH:MM entre 00:00 e 23:59.")
     if skill == SKILL_REMINDER and not params.get("text"):
         return recusar(
-            "Entendi que e um lembrete, mas nao o assunto. Diga \"me lembre de X\"."
+            "Entendi que e um lembrete, mas nao o assunto. Diga \"me lembre de X\".",
+            status="reformulate",
+            action="ask",
         )
     enabled, caminho = _skill_enabled(cfg, skill)
     if not enabled:

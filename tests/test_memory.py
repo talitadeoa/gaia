@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
@@ -480,5 +481,81 @@ def test_schema_v9_tem_a_tabela_routines(tmp_path):
 
         store.set_routine("initiative:agenda", enabled=True)
         assert store.routine_enabled("initiative:agenda") is True
+    finally:
+        store.close()
+
+
+def test_schema_v11_guarda_nome_e_params_da_automacao(tmp_path):
+    """Automacao do chat (id `user:*`) precisa de nome proprio e parametros."""
+    store = MemoryStore(tmp_path / "gaia.db")
+    try:
+        assert store.schema_version() >= 11
+        colunas = {
+            row["name"]
+            for row in store._conn.execute("PRAGMA table_info(automations)").fetchall()
+        }
+        assert {"name", "params"} <= colunas
+
+        store.upsert_automation(
+            id="user:estudar",
+            skill="reminder",
+            days="4",
+            at="09:00",
+            until="10:00",
+            name='Lembrete "Estudar" sexta as 09:00',
+            params={"text": "Estudar"},
+        )
+        linha = store.get_automation("user:estudar")
+        assert linha is not None
+        assert linha["name"].startswith("Lembrete")
+        assert json.loads(linha["params"]) == {"text": "Estudar"}
+
+        # Edicao parcial aceita o dict e serializa (mesmo campo do painel).
+        assert store.update_automation("user:estudar", params={"text": "Outro"})
+        atual = store.get_automation("user:estudar")
+        assert atual is not None and json.loads(atual["params"]) == {"text": "Outro"}
+    finally:
+        store.close()
+
+
+def test_schema_v10_migra_para_v11_sem_perder_automacao(tmp_path):
+    path = tmp_path / "gaia.db"
+    store = MemoryStore(path)
+    store.upsert_automation(
+        id="career:weekly",
+        skill="career",
+        days="0",
+        at="09:00",
+        until="18:00",
+        delivery="telegram",
+    )
+    # Simula um banco da fase anterior: schema v10 sem `name`/`params`.
+    store.set_meta("schema_version", "10")
+    with store._conn:
+        store._conn.execute("ALTER TABLE automations DROP COLUMN name")
+        store._conn.execute("ALTER TABLE automations DROP COLUMN params")
+    store.close()
+
+    store = MemoryStore(path)
+    try:
+        assert store.schema_version() >= 11
+        linha = store.get_automation("career:weekly")
+        assert linha is not None
+        assert linha["at"] == "09:00"
+        assert linha["name"] == ""
+        assert linha["params"] == ""
+    finally:
+        store.close()
+
+
+def test_count_meta_conta_so_o_prefixo(tmp_path):
+    store = MemoryStore(tmp_path / "gaia.db")
+    try:
+        store.claim_meta("automation_created:2026-11-24:user:a", "1")
+        store.claim_meta("automation_created:2026-11-24:user:b", "1")
+        store.claim_meta("automation_created:2026-11-25:user:c", "1")
+        assert store.count_meta("automation_created:2026-11-24:") == 2
+        assert store.count_meta("automation_created:") == 3
+        assert store.count_meta("nada:") == 0
     finally:
         store.close()
