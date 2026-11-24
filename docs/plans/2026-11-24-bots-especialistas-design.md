@@ -21,7 +21,7 @@ Transformar os quatro modos de hoje (`assistente`, `pesquisadora`,
 | bot | nome | papel | workspace | ferramentas |
 |---|---|---|---|---|
 | `gaia` | Gaia | orquestradora: conversa, agenda, rotina, e fala com os outros bots | `~/gaia` (diretório atual) | todas + `falar_com_bot` |
-| `donna` | Donna Haraway | dissertação, ensaios, revisão, método | `~/SecondBrain/pesquisa` | `read/list/glob/grep/write/edit` + `planilha`, escopo `~/SecondBrain` |
+| `donna` | Donna Haraway | dissertação, ensaios, revisão, método | `~/dissertacao` (clone de `talitadeoa/dissertacao`) | `read/list/glob/grep/write/edit` + `bash`, `pi`, escopo `~/dissertacao` |
 | `ariana` | Ariana Grande | bolsa, watchlist, alertas | dados (`~/.local/share/gaia`) | `bolsa`, `carteira`, `planilha`, `read` + automação `market` |
 | `sabrina` | Sabrina Carpenter | vagas, CV sob medida, carta | `~/SecondBrain/cv` | `career`, `read/list/glob/grep`, `write` restrito a `cv/` |
 | `ada` | Ada Lovelace | backlog, código, PR | `~/pr-workspace` (**nunca** `~/gaia`) | `read/write/edit/bash/grep/glob`, `pi`, `backlog` |
@@ -56,6 +56,9 @@ Transformar os quatro modos de hoje (`assistente`, `pesquisadora`,
 
 - contexto de ferramentas por sessão (o `ToolContext` é construído uma vez no
   `AgentClient.__init__` e compartilhado por todas as sessões);
+- índice textual no Second Brain para a pasta da Donna (§4.4a): `_iter_markdown`
+  só aceita `.md`, então os 17 arquivos de `pesquisa/` (13 `.md`, 2 `.docx`,
+  1 `.tex`, 1 `.html`) ficariam metade fora da busca;
 - evento por sessão (o `_events` é uma fila única; dois turnos simultâneos
   roubam eventos um do outro — ver §4.5);
 - atribuição de `runs`/`automations` a um bot;
@@ -110,10 +113,20 @@ TOML (seção nova, sem segredo dentro):
 ```toml
 [bots.donna]
 name = "Donna Haraway"
-workspace = "~/SecondBrain/pesquisa"
-scope = "~/SecondBrain"
-tools = ["read", "list", "glob", "grep", "write", "edit", "planilha"]
+# cwd do bash/pi: o clone do repo talitadeoa/dissertacao
+workspace = "~/dissertacao"
+# teto de read/list/glob/grep/write/edit. No macOS o clone aparece dentro do
+# Second Brain como pesquisa/ (symlink); `scope` fica no destino resolvido.
+scope = "~/dissertacao"
+tools = ["read", "list", "glob", "grep", "write", "edit", "bash", "pi"]
 ```
+
+A segunda opção depende do symlink: se `~/dissertacao` apontar para
+`~/SecondBrain/pesquisa`, todo caminho resolvido cai dentro do Second Brain e
+`scope` pode ser `~/SecondBrain` (a Donna passa a enxergar também `Memoria/` e
+`cv/`, o que é vantagem para cruzar leitura acadêmica com notas). Sem symlink,
+`scope = "~/dissertacao"` e ela enxerga só a dissertação. A decisão de qual
+usar é da Fase 1, quando o clone existir; o registry aceita as duas.
 
 `controller/modes.py` vira **shim de compatibilidade**: `PERSONAS` é derivado do
 registry (mesmo `dataclass Persona`), `ALIASES` ganha os nomes ("donna",
@@ -173,6 +186,38 @@ execução automática.
 | memória consolidada | nota do dia em `Memoria/`, frontmatter ganha `bots: [ida...]` | por bot, na leitura: o bot só recebe o que é dele |
 | Second Brain (pesquisa) | índice FTS5 único | `index.search` ganha filtro opcional por prefixo (`prefix=bot.scope`), hoje ele busca no índice inteiro |
 | arquivos de trabalho | `bot.workspace` | por camada 3 |
+
+### 4.4a Donna e o repositório da dissertação
+
+O `/pesquisa` do Second Brain vira o repo privado `talitadeoa/dissertacao`
+(hoje vazio, branch `main`). O clone mora em `~/dissertacao` — **fora** do
+Second Brain por dois motivos: (a) `reindex_on_start` varreria o `.git` e os
+builds de LaTeX; (b) o `.git` do repo da dissertação não pode conviver com o
+`reset --hard` do deploy da Gaia, que é de outro repositório.
+
+`Bot.directory` precisa **separar** o diretório de trabalho (`~/dissertacao`,
+usado por `bash`/`pi` como `cwd`) do teto de leitura (`scope`, usado por
+`read/list/glob/grep`). São dois campos, não um: um bot só quebraria o outro.
+
+Ferramentas da Donna: `read/list/glob/grep/write/edit` (escopo da §4.2) **e**
+`bash`/`pi` com `cwd = ~/dissertacao` (`git`, `pdflatex`, PR). O `bash` dela é
+aprovado por turno, como qualquer outro; compilar LaTeX e commitar é exatamente
+o tipo de ação que a pessoa vê e aprova.
+
+**O que o índice não cobre hoje.** `SecondBrainIndex._iter_markdown` só aceita
+`.md`; o conteúdo atual de `pesquisa/` é 13 `.md`, 2 `.docx`, 1 `.tex`, 1
+`.html`. Três consequências, todas de escopo pequeno:
+
+1. Fase 1: `config.secondbrain.text_extensions` (padrão hoje `.md`; a Donna
+   liga `.tex`, `.bib`, `.txt`). Extração de texto puro por leitura do
+   arquivo; **sem** dependência nova.
+2. `.docx` fica **fora** do índice de propósito: é zip+XML e exige
+   biblioteca nova (`python-docx`), que é dependência que o repo evita. A
+   Donna lê `.docx` pelo `bash` (`unzip -p arquivo.docx word/document.xml`),
+   sob demanda e com aprovação — não vale inflar o índice com prosa em XML.
+3. `pdf` idem: `gaia/audiobook/extract.py` já tem um leitor de PDF **sem
+dependência**; é o candidato natural quando a dissertação passar a ter PDF no
+repo, mas fica para depois do MVP.
 
 Duas regras que evitam o "vazamento de instruções" que você citou:
 
@@ -348,6 +393,12 @@ commitável sozinha.
 3. **Schema v12** — colunas `bot` + `bot_messages` + `MemoryStore` métodos
    (`add_bot_message`, `list_bot_messages`, `mark_bot_seen`, `unread_by_bot`).
    *Teste*: migração idempotente, ordem e contagem do feed.
+4. **Índice com extensão configurável** — `secondbrain.text_extensions`
+   (padrão `[".md"]`); `_iter_markdown` passa a aceitar as extensões da
+   config e a guardar o texto cru para `.tex`/`.txt`/`.bib`. Respeita
+   `exclude` e ignora dotdir (`.git`, `.venv`) como hoje.
+   *Teste*: árvore fake com `.md`/`.tex`/`.docx`; só os configurados entram,
+   `.docx` continua fora, reindex remove arquivo apagado. Sem dependência nova.
 
 ### Fase 1 — MVP: bots isolados e selecionáveis
 
@@ -365,35 +416,42 @@ commitável sozinha.
 6. **Rotas `/bots` e `/bot/select`** no `Target` + `server.py`, com `bot` no
    `/health` e no `engine`. *Teste*: contrato em `test_serve_web.py`
    (id sem duplicata, seletor existente) e `test_serve_app.py` (409 ocupado).
+7. **Clone da dissertação** (passo operacional, não de código):
+   `git clone git@github.com:talitadeoa/dissertacao.git ~/dissertacao`, mover
+   o conteúdo de `~/SecondBrain/pesquisa` para lá (preservando
+   `capitulos/debate publico/*.md` e `_templates/`), commit + push, e decidir
+   §4.4a (symlink ou `scope` separado). Sem esse passo a Donna sobe sem
+   workspace e o validador do registry recusa — que é o comportamento
+   desejado.
 
 ### Fase 2 — sidebar e atividade (fecha o MVP visível)
 
-7. **Sidebar + `#b/<bot>`** no `index.html` (rail, badge, indicador de rodando;
+8. **Sidebar + `#b/<bot>`** no `index.html` (rail, badge, indicador de rodando;
    `corpo` do chat redesenha em `/bot/select`). *Teste*: `test_serve_web.py`
    confere hash→tela, ids e que o rail é montado a partir de `/bots`.
-8. **Feed de atividade + não-lido** (`GET /bots/activity`, `POST /bots/seen`,
+9. **Feed de atividade + não-lido** (`GET /bots/activity`, `POST /bots/seen`,
    evento `bot_activity` no `tratarEvento`). *Teste*: evento com `bot` alheio
    não entra na conversa; badge zera.
 
 ### Fase 3 — automações por bot
 
-9. **`automations.bot`/`runs.bot`** no seed (`describe`), no `render`, no
-   `/automations` (agrupado) e no scheduler (gate por bot, não global).
-   *Teste*: Ariana e Ada devidas no mesmo minuto rodam; automação da Ariana não
-   roda com a sessão da Ariana ocupada e não bloqueia a Ada.
-10. **Skill `bot_task`** + `run_bot_task(bot_id, prompt)` consumindo a fila da
+10. **`automations.bot`/`runs.bot`** no seed (`describe`), no `render`, no
+    `/automations` (agrupado) e no scheduler (gate por bot, não global).
+    *Teste*: Ariana e Ada devidas no mesmo minuto rodam; automação da Ariana
+    não roda com a sessão da Ariana ocupada e não bloqueia a Ada.
+11. **Skill `bot_task`** + `run_bot_task(bot_id, prompt)` consumindo a fila da
     sessão, gravando `runs` + `bot_messages`; `criar_automacao` aceita
     `bot` na lista fechada. *Teste*: job grava mensagem, erro vira `runs.failed`
     com `error_kind` e mensagem no feed.
-11. **Ada no backlog** — `BacklogWorker` etiqueta `bot=ada`; o PR aberto vira
+12. **Ada no backlog** — `BacklogWorker` etiqueta `bot=ada`; o PR aberto vira
     `bot_messages`. *Teste*: `test_backlog.py` com o campo novo.
 
 ### Fase 4 — bots conversando
 
-12. **`BotBus` + ferramenta `falar_com_bot`** com profundidade, allowlist de
+13. **`BotBus` + ferramenta `falar_com_bot`** com profundidade, allowlist de
     destino e auditoria. *Teste*: chamada de 2 níveis funciona, 3 níveis recusa,
     destino desconhecido recusa, ciclo A→B→A para.
-13. **Tela**: agrupar `inter_bot` no feed. *Teste* de contrato.
+14. **Tela**: agrupar `inter_bot` no feed. *Teste* de contrato.
 
 ## 8. Escopo cortado (YAGNI deliberado)
 
@@ -411,8 +469,9 @@ commitável sozinha.
 
 1. Cinco bots na sidebar; cada um abre a própria thread, com histórico próprio
    preservado depois de F5 e de restart do `serve`.
-2. Donna não consegue `bash` nem escrever fora de `~/SecondBrain` — verificado
-   por teste, não por prompt.
+2. Donna não consegue escrever fora do `scope` nem rodar `pi` — verificado por
+   teste, não por prompt. (`bash` ela **tem**: é o que compila LaTeX e faz o
+   PR no repo da dissertação; a aprovação por turno continua valendo.)
 3. Ariana não vê a conversa da Ada em `/history`, `/sessions` nem no prompt.
 4. Um segundo plano rodando não rouba evento nem atrasa o turno interativo de
    outro bot.
@@ -421,9 +480,11 @@ commitável sozinha.
 
 ## 10. Perguntas abertas (decidir antes da Fase 3)
 
-1. **Donna**: a dissertação vive em `~/SecondBrain/pesquisa` mesmo, ou há um
-   repo separado (LaTeX/Overleaf) que ela precisa alcançar? Define `workspace`
-   e `scope`.
+1. ~~**Donna**: repo separado para a dissertação?~~ **Resolvido**: repo
+   privado `talitadeoa/dissertacao` (branch `main`, ainda vazio), clone em
+   `~/dissertacao`, conteúdo de `~/SecondBrain/pesquisa` migra para lá. Ver
+   §4.4a. Resta decidir symlink vs. `scope` separado — decisão de setup da
+   Fase 1, não de arquitetura.
 2. **Ariana**: o resumo deve continuar puramente determinístico (custo zero) ou
    você quer a leitura analítica do modelo todo dia? A segunda custa tokens
    diários e merece um horário fixo.
