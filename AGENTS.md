@@ -190,21 +190,27 @@ gaia tests` e `mypy` em Python 3.12. Não faça commit com qualquer um vermelho.
   `status`/`last_run` ja vem de `describe_automations` — nao reimplemente a
   regra na tela. Testes: `tests/test_serve_web.py` (contrato da view) e
   `tests/test_control_api.py` (rotas, 401/404/422/503, TOML e processo).
-- **Card de backlog (web):** o MESMO componente (`backlogCard(dados, {local})`)
-  desenha os dois lugares a partir de `GET /backlog`: no aside ele nasce
-  recolhido (cabecalho com `7 itens · 3 pendentes` + botao atualizar) e abre ao
-  clique; na tela `#automacoes` (`#backlog-tela`) ja nasce aberto, logo abaixo
-  das rotinas. O aberto/fechado do card (`estado.backlogAbertura`) e de cada
-  collapsible (`estado.backlogGrupos`, chave `local:projeto`) ficam no estado,
-  senao o redesenho do SSE fecha o que a pessoa abriu; o rascunho do campo
-  "novo item" (`estado.backlogRascunho`) tambem. Escrita: `POST /backlog/sync`
-  (Agenda), `/backlog/add` (chat/voz) e `/backlog/run` (despacha ao pi; 409 com
-  o motor ocupado). Status vem do servidor (`status`/`status_label`) — nao
-  reimplemente a regra na tela; a limpeza de 7 dias e do SQL (`prune_days`).
-  `el()` em `shared.js` achata listas de filhos com `flat(Infinity)`: devolver
-  uma lista de `<details>` sem isso imprime `[object HTMLDetailsElement]`.
-  Testes: `tests/test_serve_web.py` (contrato da tela) e `tests/test_backlog.py`
-  (rotas e o worker).
+- **Backlog (web):** duas peles para o mesmo dado (`GET /backlog`). O card do
+  aside (`#backlog-card`, `backlogCard`) nasce RECOLHIDO (`7 itens · 3
+  pendentes` + botoes "tela"/"atualizar") e abre ao clique no cabecalho; a tela
+  propria (`#view-backlog`, hash `#backlog`, como a de automacoes) usa o mesmo
+  corpo (`backlogCorpo(dados, {local})`) sem cabecalho recolhivel, com resumo e
+  botoes no header da view. `local` e `card` ou `agenda`: cada pele tem o seu
+  aberto/fechado de grupo (`estado.backlogGrupos`, chave `local:projeto`), o seu
+  rascunho (`estado.backlogRascunho`) e o seu id de campo
+  (`backlog-novo-<local>`), senao o redesenho do SSE fecha o que a pessoa abriu
+  — `pintarBacklog` guarda o foco antes e devolve depois. O aberto/fechado do
+  card (`estado.backlogAbertura`, so `card`) tambem fica no estado. A tela de
+  automacoes NAO mostra mais o backlog: `naTela` navega entre `#automacoes` e
+  `#backlog` (`telaAtual`/`irParaTela`); o botao do header so aparece quando
+  `GET /backlog` responde com `enabled`. Escrita: `POST /backlog/sync` (Agenda),
+  `/backlog/add` (chat/voz) e `/backlog/run` (despacha ao pi; 409 com o motor
+  ocupado). Status vem do servidor (`status`/`status_label`) — nao reimplemente
+  a regra na tela; a limpeza de 7 dias e do SQL (`prune_days`). `el()` em
+  `shared.js` achata listas de filhos com `flat(Infinity)`: devolver uma lista
+  de `<details>` sem isso imprime `[object HTMLDetailsElement]`.
+  Testes: `tests/test_serve_web.py` (contrato das duas peles) e
+  `tests/test_backlog.py` (rotas e o worker).
 - **Voz no web:** duas portas para o mesmo Whisper (`gaia/serve/voice.py`).
   `[serve] voice_source = "browser"` (padrao) faz o *navegador* gravar WAV
   16-bit mono e mandar em `POST /voice/upload` — o mini headless so transcreve;

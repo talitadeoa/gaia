@@ -63,19 +63,19 @@
             text-overflow: ellipsis; white-space: nowrap; min-width: 8ch; }
   /* Tela propria de automacoes (`#automacoes` na URL): ocupa o lugar do
      chat, mantendo o cabecalho com status/instancia. */
-  #view-automacoes {
+  #view-automacoes, #view-backlog {
     overflow-y: auto; padding: 18px; display: flex; flex-direction: column;
     gap: 12px; align-items: stretch; max-width: 900px; width: 100%; margin: 0 auto;
     min-height: 0;
   }
-  #view-automacoes[hidden] { display: none; }
+  #view-automacoes[hidden], #view-backlog[hidden] { display: none; }
   /* `hidden` sozinho nao basta: `main { display: grid }` vence a regra do UA. */
   #view-chat[hidden], footer[hidden] { display: none; }
-  #view-automacoes > header.tela {
+  #view-automacoes > header.tela, #view-backlog > header.tela {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 0 0 8px; border-bottom: 1px solid var(--line); background: none;
   }
-  #view-automacoes h2 { font-size: 15px; margin: 0; letter-spacing: .03em; }
+  #view-automacoes h2, #view-backlog h2 { font-size: 15px; margin: 0; letter-spacing: .03em; }
   .auto-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px;
                background: var(--panel); display: flex; flex-direction: column; gap: 6px; }
   .auto-card.falhou { border-color: color-mix(in srgb, var(--err) 45%, var(--line)); }
@@ -265,6 +265,9 @@
   .backlog-card li .erro { color: var(--err); font-size: 11px; overflow-wrap: anywhere;
                            display: block; }
   .backlog-card.recolhido { padding: 9px 12px; }
+  /* Na tela propria (#backlog) o corpo nao e um cartao: ja esta dentro de uma
+     view com padding e cada projeto tem a sua borda. */
+  .backlog-card.backlog-tela { border: 0; padding: 0; background: none; }
   .backlog-card .novo { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   /* Aside estreito: o campo ocupa a linha toda; seletor e botao dividem a de
      baixo, sem cortar o "adicionar" na borda. */
@@ -307,6 +310,8 @@
   <span id="status"></span>
   <button id="btn-automacoes" class="pill" type="button"
           title="estado das automações: próxima execução, atrasos e última rodada" hidden>automações</button>
+  <button id="btn-backlog" class="pill" type="button"
+          title="backlog dos projetos: itens da Agenda, status e o que já virou PR" hidden>backlog</button>
   <button id="btn-sessoes" class="pill" type="button" title="abrir uma conversa anterior">sessões</button>
   <button id="btn-nova" class="pill" type="button" title="comecar uma conversa nova">+ nova</button>
   <button id="btn-idiomas" class="pill" type="button"
@@ -345,8 +350,22 @@
   </header>
   <div id="auto-proativo" class="auto-card"></div>
   <div id="auto-lista"></div>
-  <!-- Backlog logo abaixo das automacoes, como pedido: a mesma fonte do card
-       do aside (`GET /backlog`), sem duplicar logica. -->
+</section>
+
+<!-- Tela propria do backlog (botao "backlog" do header). Como a de
+     automacoes: nao e dialog, o hash `#backlog` e a fonte de verdade (F5 e o
+     voltar do navegador continuam nela). O corpo e o MESMO do card do aside
+     (`backlogCorpo`), so que aqui sem cabecalho recolhivel. -->
+<section id="view-backlog" hidden aria-label="Backlog dos projetos">
+  <header class="tela">
+    <h2>Backlog</h2>
+    <span id="backlog-resumo" class="dica"></span>
+    <span class="dica" style="flex:1"></span>
+    <button id="backlog-atualizar" class="pill" type="button"
+            title="consultar as páginas de backlog na Agenda e atualizar a lista">atualizar</button>
+    <button id="backlog-chat" class="pill" type="button"
+            title="voltar para a conversa">voltar ao chat</button>
+  </header>
   <div id="backlog-tela"></div>
 </section>
 
@@ -471,16 +490,18 @@ const estado = {
   textoFinal: "",     // ultimo texto que a Gaia escreveu no turno
   automacoesProativo: null, // bloco `proactive` de `GET /automations`
   // Backlog: o card do aside nasce RECOLHIDO (so a contagem no cabecalho) e
-  // abre ao clique; na tela `#automacoes` ele ja nasce aberto, porque ali o
-  // espaco e o proposito. O estado sobrevive ao redesenho do SSE.
-  backlogAbertura: { card: false, tela: true },
-  backlogDados: null, // ultimo `GET /backlog` (o toggle redesenha so um lugar)
+  // abre ao clique; a tela `#backlog` e o corpo inteiro, sempre aberto. O
+  // estado sobrevive ao redesenho do SSE.
+  backlogAbertura: { card: false },
+  backlogDados: null, // ultimo `GET /backlog` (o toggle redesenha so o card)
+  backlogErro: "",    // falha ao ler `/backlog` (a tela e o card mostram o motivo)
   // Aberto/fechado de cada collapsible, por projeto (a pessoa manda).
   backlogGrupos: {},
-  // Rascunho do campo "novo item", um por card (sao dois, com nos proprios).
+  // Rascunho do campo "novo item", um por pele (`card` no aside, `agenda` na
+  // tela): os dois cards tem nos proprios e nao podem compartilhar o texto.
   backlogRascunho: {
     card: { texto: "", projeto: "" },
-    tela: { texto: "", projeto: "" },
+    agenda: { texto: "", projeto: "" },
   },
 };
 
@@ -768,34 +789,36 @@ function autoTag(status) {
   return window.Gaia.el("span", { class: "tag " + (AUTO_STATUS[status] || ["", ""])[1] }, rotulo);
 }
 
-/* -------------------------------------------------- tela de automações --- */
+/* -------------------------------------------------- telas próprias --- */
 
-/** A tela de automacoes esta aberta? (o hash e a unica fonte de verdade) */
-function naTelaDeAutomacoes() {
-  return location.hash === "#automacoes";
+/** Qual tela propria esta aberta? O hash e a unica fonte de verdade. */
+function telaAtual() {
+  const rotas = { "#automacoes": "automacoes", "#backlog": "backlog" };
+  return rotas[location.hash] || "chat";
 }
 
-/** Mostra/oculta chat e tela de automacoes conforme o hash. */
+/** Mostra/oculta o chat e as telas proprias conforme o hash. */
 function pintarTelaAtual() {
-  const naAgenda = naTelaDeAutomacoes();
-  $("#view-chat").hidden = naAgenda;
-  $("#view-automacoes").hidden = !naAgenda;
-  // Sem composer na tela de automacoes: digitar ali nao teria destino.
-  document.querySelector("footer").hidden = naAgenda;
-  if (naAgenda) {
-    carregarTelaAutomacoes();
-    // A tela mostra o card do backlog logo abaixo das rotinas: chega fresco.
-    carregarBacklog();
-  } else rolar();
+  const tela = telaAtual();
+  const naTela = tela !== "chat";
+  $("#view-chat").hidden = naTela;
+  $("#view-automacoes").hidden = tela !== "automacoes";
+  $("#view-backlog").hidden = tela !== "backlog";
+  // Sem composer nas telas proprias: digitar ali nao teria destino.
+  document.querySelector("footer").hidden = naTela;
+  if (tela === "automacoes") carregarTelaAutomacoes();
+  // As duas telas mostram o backlog: uma leitura so serve para as duas.
+  if (naTela) carregarBacklog();
+  else rolar();
 }
 
-/** Botao do header e "voltar ao chat": navegam pelo hash (F5 preserva). */
-function irParaAutomacoes() {
-  if (naTelaDeAutomacoes()) {
-    carregarTelaAutomacoes();
+/** Botao do header: navega pelo hash (F5 e o voltar do navegador preservam). */
+function irParaTela(hash) {
+  if (location.hash === hash) {
+    pintarTelaAtual();
     return;
   }
-  location.hash = "#automacoes";
+  location.hash = hash;
 }
 
 function voltarAoChat() {
@@ -840,24 +863,25 @@ async function carregarAutomacoes() {
   ));
 }
 
-/** Estado do card, ou null quando este motor não expõe o backlog. */
+/** Estado do card e da tela, ou null quando este motor não expõe o backlog. */
 async function carregarBacklog() {
   const card = $("#backlog-card");
+  // Sem `GET /backlog` (503) ou com falha, as duas peles somem: melhor nada
+  // do que um card mentindo "vazio".
+  const esconder = (motivo) => {
+    estado.backlogErro = motivo;
+    card.hidden = true;
+    card.replaceChildren();
+    pintarTelaBacklog(null);
+  };
   try {
     const dados = await api("/backlog");
     pintarBacklog(dados);
     return dados;
   } catch (erro) {
     if (erro.status === 401) { tratar401(erro); return null; }
-    if (erro.status === 503) {
-      card.hidden = true;
-      card.replaceChildren();
-      $("#backlog-tela").replaceChildren();
-      return null;
-    }
-    card.hidden = false;
-    card.replaceChildren(window.Gaia.el("p", { class: "vazio" },
-      "backlog indisponível: " + texto(erro.message)));
+    if (erro.status === 503) { esconder(""); return null; }
+    esconder("backlog indisponível: " + texto(erro.message));
     return null;
   }
 }
@@ -1206,12 +1230,12 @@ function backlogGrupo(grupo, { local }) {
     .filter(([chave, total]) => total > 0 && chave !== "done")
     // O aside e estreito: so o que pede acao. A tela tem espaco para o rotulo
     // inteiro de cada estado.
-    .filter(([chave]) => local === "tela" || chave === "pending" || chave === "failed")
+    .filter(([chave]) => local !== "card" || chave === "pending" || chave === "failed")
     .map(([chave, total]) => {
       const [rotulo, classe, curto] = BACKLOG_STATUS[chave] || [chave, "", chave];
       return window.Gaia.el("span", { class: classe === "err" ? "erro-contagem" : "",
                                       title: rotulo + ": " + total },
-        (local === "tela" ? rotulo : curto) + " " + total);
+        (local === "card" ? curto : rotulo) + " " + total);
     });
   const aberto = chaveEstado in estado.backlogGrupos
     ? estado.backlogGrupos[chaveEstado]
@@ -1248,27 +1272,61 @@ function backlogResumo(dados, grupos) {
  * Desenha o card a partir do JSON de `GET /backlog`.
  *
  * Dois lugares, o mesmo componente (`backlogCard`): o aside fica RECOLHIDO
- * (cabecalho com a contagem, como o card de automacoes) e a tela
- * `#automacoes` mostra a lista ja aberta, logo abaixo das rotinas. O ultimo
- * JSON fica em `estado.backlogDados` para o toggle redesenhar SO o lugar
- * clicado (o outro card nao perde o foco do campo de texto).
+ * (cabecalho com a contagem, como o card de automacoes) e a tela `#backlog`
+ * reusa o mesmo corpo (`backlogCorpo`) sem cabecalho, ja aberto. O ultimo JSON
+ * fica em `estado.backlogDados` para o toggle redesenhar SO o card (a tela
+ * nao perde o foco do campo de texto).
  */
-function pintarBacklog(dados) {
-  estado.backlogDados = dados || null;
-  pintarBacklogLocal("card");
-  pintarBacklogLocal("tela");
+/** Id do campo do backlog que esta com o foco (se houver), para o redesenho
+ *  do SSE nao roubar o cursor de quem esta escrevendo um item novo. */
+function focoDoBacklog() {
+  const ativo = document.activeElement;
+  if (!(ativo instanceof HTMLElement) || !ativo.id) return "";
+  return ativo.closest("#backlog-card, #backlog-tela") ? ativo.id : "";
 }
 
-function pintarBacklogLocal(local) {
-  const alvo = local === "card" ? $("#backlog-card") : $("#backlog-tela");
+function pintarBacklog(dados) {
+  const foco = focoDoBacklog();
+  estado.backlogDados = dados || null;
+  pintarBacklogCard();
+  pintarTelaBacklog(dados);
+  if (foco) $(`#${foco}`)?.focus();
+}
+
+/** Redesenha SO o card do aside (o toggle nao mexe na tela `#backlog`). */
+function pintarBacklogCard() {
+  const alvo = $("#backlog-card");
   const dados = estado.backlogDados;
   if (!dados || !dados.enabled) {
-    if (local === "card") alvo.hidden = true;
+    alvo.hidden = true;
     alvo.replaceChildren();
     return;
   }
-  if (local === "card") alvo.hidden = false;
-  alvo.replaceChildren(backlogCard(dados, { local }));
+  alvo.hidden = false;
+  alvo.replaceChildren(backlogCard(dados, { local: "card" }));
+}
+
+/**
+ * A tela `#backlog` (nao e o card): cabecalho proprio na view e o corpo
+ * completo aqui, com o rascunho de item novo separado do card do aside.
+ *
+ * `null` esconde o botao do header (este motor nao expoe backlog) e deixa o
+ * motivo na tela quando ela esta aberta por URL (`#backlog` no F5).
+ */
+function pintarTelaBacklog(dados) {
+  const alvo = $("#backlog-tela");
+  const botao = $("#btn-backlog");
+  const disponivel = Boolean(dados && dados.enabled);
+  botao.hidden = !disponivel;
+  if (!disponivel) {
+    $("#backlog-resumo").textContent = "";
+    alvo.replaceChildren(window.Gaia.el("p", { class: "dica" },
+      estado.backlogErro || "este motor não expõe o backlog"));
+    return;
+  }
+  const grupos = Array.isArray(dados.groups) ? dados.groups : [];
+  $("#backlog-resumo").textContent = backlogResumo(dados, grupos);
+  alvo.replaceChildren(backlogCorpo(dados, { local: "agenda" }));
 }
 
 /**
@@ -1281,14 +1339,11 @@ function pintarBacklogLocal(local) {
  */
 function backlogCard(dados, { local }) {
   const grupos = Array.isArray(dados.groups) ? dados.groups : [];
-  const worker = dados.worker || {};
   const aberto = estado.backlogAbertura[local] !== false;
-  const rascunho = estado.backlogRascunho[local];
-  const projetos = Object.keys(dados.repos || {});
 
   const alternar = () => {
     estado.backlogAbertura[local] = !estado.backlogAbertura[local];
-    pintarBacklogLocal(local);
+    pintarBacklogCard();
   };
   const resumo = backlogResumo(dados, grupos);
   const cabecalho = window.Gaia.el("button", {
@@ -1307,12 +1362,39 @@ function backlogCard(dados, { local }) {
     title: "consultar as páginas de backlog na Agenda e atualizar a lista",
     onclick: (evento) => sincronizarBacklog(evento.currentTarget),
   }, "atualizar");
+  // O card do aside e a versao curta: a tela `#backlog` tem o espaco para ler
+  // tudo. O toque no cabecalho continua so recolhendo/expandindo aqui.
+  const abrirTela = window.Gaia.el("button", {
+    class: "pill",
+    type: "button",
+    title: "abrir o backlog na tela inteira",
+    onclick: () => irParaTela("#backlog"),
+  }, "tela");
+  const ferramentas = [abrirTela, atualizar];
   if (!aberto) {
     return window.Gaia.el("div", { class: "backlog-card recolhido" },
-      window.Gaia.el("div", { class: "topo" }, cabecalho, atualizar));
+      window.Gaia.el("div", { class: "topo" }, cabecalho, ferramentas));
   }
+  return window.Gaia.el("div", { class: "backlog-card" },
+    window.Gaia.el("div", { class: "topo" }, cabecalho, ferramentas),
+    backlogCorpo(dados, { local }));
+}
 
+/**
+ * Corpo do backlog (compartilhado pelo card e pela tela `#backlog`): aviso de
+ * worker desligado, um collapsible por projeto, o campo de item novo e a nota
+ * da limpeza de 7 dias. O `local` existe porque cada pele tem o seu rascunho
+ * (`estado.backlogRascunho`) e o seu aberto/fechado (`estado.backlogGrupos`).
+ */
+function backlogCorpo(dados, { local }) {
+  const grupos = Array.isArray(dados.groups) ? dados.groups : [];
+  const worker = dados.worker || {};
+  const rascunho = estado.backlogRascunho[local];
+  // A tela tem espaco: o campo de item novo pode citar o repo do projeto.
+  const naTela = local !== "card";
+  const projetos = Object.keys(dados.repos || {});
   const seletorProjeto = window.Gaia.el("select", {
+    id: "backlog-projeto-" + local,
     title: "projeto do item novo",
     onchange: (evento) => { rascunho.projeto = evento.target.value; },
   }, (projetos.length ? projetos : ["chat"]).map((nome) =>
@@ -1321,6 +1403,7 @@ function backlogCard(dados, { local }) {
       ...(nome === rascunho.projeto ? { selected: "selected" } : {}),
     }, nome)));
   const entradaNova = window.Gaia.el("input", {
+    id: "backlog-novo-" + local,
     type: "text",
     value: rascunho.texto,
     placeholder: "novo item (texto ou voz)…",
@@ -1337,7 +1420,6 @@ function backlogCard(dados, { local }) {
         method: "POST",
         body: JSON.stringify({ text: valor, project: seletorProjeto.value }),
       });
-      estado.backlogAbertura[local] = true;
       aviso("success", "item adicionado ao backlog.");
       await carregarBacklog();
     } catch (erro) {
@@ -1349,8 +1431,7 @@ function backlogCard(dados, { local }) {
   entradaNova.addEventListener("keydown", (evento) => {
     if (evento.key === "Enter") { evento.preventDefault(); adicionar(); }
   });
-  return window.Gaia.el("div", { class: "backlog-card" },
-    window.Gaia.el("div", { class: "topo" }, cabecalho, atualizar),
+  return window.Gaia.el("div", { class: "backlog-card" + (naTela ? " backlog-tela" : "") },
     worker.enabled === false
       ? window.Gaia.el("div", { class: "notice warning" }, texto(dados.reason || "backlog desligado"))
       : null,
@@ -2600,13 +2681,17 @@ async function sair() {
 
 $("#modelo").addEventListener("click", abrirModelos);
 $("#modo").addEventListener("click", abrirModos);
-$("#btn-automacoes").addEventListener("click", irParaAutomacoes);
+$("#btn-automacoes").addEventListener("click", () => irParaTela("#automacoes"));
+$("#btn-backlog").addEventListener("click", () => irParaTela("#backlog"));
 $("#btn-chat").addEventListener("click", voltarAoChat);
+$("#backlog-chat").addEventListener("click", voltarAoChat);
 $("#auto-atualizar").addEventListener("click", () => {
   carregarTelaAutomacoes();
   carregarBacklog();
 });
-$("#automacoes").addEventListener("click", irParaAutomacoes);
+$("#backlog-atualizar").addEventListener("click", (evento) =>
+  sincronizarBacklog(evento.currentTarget));
+$("#automacoes").addEventListener("click", () => irParaTela("#automacoes"));
 $("#btn-sessoes").addEventListener("click", abrirSessoes);
 $("#nova-sessao").addEventListener("click", novaSessao);
 $("#btn-nova").addEventListener("click", novaSessao);
@@ -2717,8 +2802,8 @@ window.addEventListener("hashchange", pintarTelaAtual);
   carregarAutomacoes();
   carregarBacklog();
   conectar();
-  // O hash e a fonte de verdade da tela (`#automacoes`): F5, link e o
-  // voltar/avancar do navegador continuam na mesma tela.
+  // O hash e a fonte de verdade das telas (`#automacoes`, `#backlog`): F5,
+  // link e o voltar/avancar do navegador continuam na mesma tela.
   pintarTelaAtual();
 })();
 </script>

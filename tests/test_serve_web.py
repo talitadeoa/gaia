@@ -93,9 +93,9 @@ def test_tela_de_automacoes_no_html():
     assert 'id="view-chat"' in texto
     assert 'dialog id="automacoes-dialog"' not in texto
     assert "automacoes" in coletor.ids
-    # O botao chama a navegacao, nao `showModal`.
-    assert '"#btn-automacoes").addEventListener("click", irParaAutomacoes)' in texto
-    assert 'location.hash = "#automacoes"' in texto
+    # O botao chama a navegacao (pelo hash), nao `showModal`.
+    assert '"#btn-automacoes").addEventListener("click", () => irParaTela("#automacoes"))' in texto
+    assert '"#automacoes": "automacoes"' in texto
     assert 'hashchange' in texto
     # Le o mesmo JSON do painel e nao inventa status.
     assert 'api("/automations")' in texto
@@ -108,23 +108,55 @@ def test_tela_de_automacoes_no_html():
     assert '"deu certo"' in texto and '"não rodou"' in texto
 
 
+def test_tela_de_backlog_propria():
+    """O backlog tem tela propria (`#backlog`), como a de automacoes.
+
+    O card do aside ja existia; o que faltava era o espaco para ler o backlog
+    inteiro (todos os estados, o repo de cada projeto, o campo de item novo)
+    sem o aperto de 320px. A tela e uma VIEW, nao um dialog: o hash e a fonte
+    de verdade (F5 e o voltar do navegador continuam nela) e o corpo vem do
+    MESMO componente do card (`backlogCorpo`), sem duplicar regra.
+    """
+    texto, coletor = _html()
+    assert 'id="btn-backlog"' in texto
+    assert 'id="view-backlog"' in texto
+    assert 'id="backlog-tela"' in texto
+    assert "view-backlog" in coletor.ids
+    assert "automacoes" in coletor.ids
+    assert 'dialog id="backlog"' not in texto
+    # Navegacao pelo hash, sem showModal.
+    assert '"#btn-backlog").addEventListener("click"' in texto
+    assert '"#backlog": "backlog"' in texto
+    assert 'function irParaTela(hash)' in texto
+    assert '$("#view-backlog").hidden = tela !== "backlog"' in texto
+    # A tela nao duplica a regra: cabecalho de la, corpo compartilhado aqui.
+    assert 'alvo.replaceChildren(backlogCorpo(dados, { local: "agenda" }))' in texto
+    assert '"#backlog-chat").addEventListener("click", voltarAoChat)' in texto
+    assert '"#backlog-atualizar").addEventListener("click"' in texto
+    # O card recolhido do aside tem um botao "tela" (nao um clique fantasma
+    # no cabecalho, que continua recolhendo/expandindo).
+    assert '"abrir o backlog na tela inteira"' in texto
+    assert 'onclick: () => irParaTela("#backlog")' in texto
+
+
 def test_card_de_backlog_expande_ao_clicar():
     """O card do aside nasce recolhido e abre no clique, como o de automacoes.
 
     O bug que isto guarda: o card despejava a lista crua no aside (com
     `[object HTMLDetailsElement]` no lugar de cada projeto) e o cabecalho
     repetia ``7 item(ns) · 3 pendente(s)``. Agora o mesmo componente desenha
-    os dois lugares (aside recolhido, tela `#automacoes` aberta).
+    os dois lugares (aside recolhido, tela `#backlog` aberta).
     """
     texto, _ = _html()
     assert 'id="backlog-card"' in texto and 'id="backlog-tela"' in texto
     # Um componente so, com o estado de aberto/fechado por lugar.
     assert "function backlogCard(dados, { local })" in texto
+    assert "function backlogCorpo(dados, { local })" in texto
     assert "function pintarBacklog(dados)" in texto
-    # O toggle redesenha so o lugar clicado (o outro card nao perde o foco).
-    assert "function pintarBacklogLocal(local)" in texto
+    # O toggle redesenha so o card (a tela nao perde o foco do campo).
+    assert "function pintarBacklogCard()" in texto
     assert "backlogDados: null" in texto
-    assert "backlogAbertura: { card: false, tela: true }" in texto
+    assert "backlogAbertura: { card: false }" in texto
     assert 'class: "topo abrir"' in texto and "aria-expanded" in texto
     # Cada projeto e um collapsible de verdade (`details`/`summary`).
     assert 'window.Gaia.el("details", { class: "projeto"' in texto
