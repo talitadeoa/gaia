@@ -13,6 +13,7 @@ import json
 import logging
 import secrets
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +51,7 @@ from gaia.agent.providers import (
     normalize_provider,
     resolve_api_key,
 )
-from gaia.agent.session import AgentSession, SessionStore
+from gaia.agent.session import AgentSession, SessionPolicy, SessionStore
 from gaia.agent.tools import ToolContext, ToolResult, ToolSet, build_tools
 from gaia.agent.types import (
     AssistantMessage,
@@ -111,6 +112,59 @@ class AgentClient:
     def set_audiobook_watch(self, callback: Any) -> None:
         """Canal entrega o MP3: callback(task, job) quando a narracao termina."""
         self._tool_context.audiobook_watch = callback
+
+    # -------------------------------------------------------------- politica
+    def set_session_policy(
+        self, session_id: str, policy: SessionPolicy | None
+    ) -> None:
+        """Fixa tools/diretorio/escopo de uma sessao (idempotente).
+
+        A politica vale a partir do proximo turno e e persistida junto da
+        sessao: reiniciar o processo nao devolve as ferramentas todas para um
+        bot restrito.
+        """
+        session = self._session(session_id)
+        if session is None:
+            raise AgentError(f"sessao nao encontrada: {session_id}")
+        session.policy = policy
+        self._save(session)
+
+    def _allowed_tools_for(
+        self, session: AgentSession, tool_names: tuple[str, ...] | None
+    ) -> set[str] | None:
+        """Catalogo efetivo do turno: politica da sessao > pedido do turno > tudo.
+
+        A politica vem primeiro porque e barreira de seguranca: um turno nao
+        consegue ampliar o que o bot nao tem.
+        """
+        policy = session.policy
+        if policy is not None and policy.tools is not None:
+            catalogo = set(policy.tools)
+            if tool_names is not None:
+                catalogo &= set(tool_names)
+            return catalogo
+        if tool_names is not None:
+            return set(tool_names)
+        return set(self.tools.names())
+
+    def _tool_context_for(self, session: AgentSession) -> ToolContext:
+        """Contexto de ferramentas do turno: diretorio/escopo da politica.
+
+        Substitui os campos por sessao sem mexer no contexto global (que
+        continua sendo o do `gaia`, com todas as integracoes).
+        """
+        policy = session.policy
+        if policy is None or not (policy.directory or policy.scope):
+            return self._tool_context
+        return replace(
+            self._tool_context,
+            directory=(
+                Path(policy.directory).expanduser()
+                if policy.directory
+                else self._tool_context.directory
+            ),
+            scope=policy.scope,
+        )
 
     # ------------------------------------------------------------------ config
     @property
@@ -683,9 +737,7 @@ class AgentClient:
             turn_usage = await self._compact_history(session)
             session.messages.append(ChatMessage(role="user", content=text))
             user_index = len(session.messages) - 1
-            session.allowed_tools = (
-                set(tool_names) if tool_names is not None else set(self.tools.names())
-            )
+            session.allowed_tools = self._allowed_tools_for(session, tool_names)
             system_text = system
             if session.summary:
                 system_text = (
@@ -892,7 +944,10 @@ class AgentClient:
             )
         )
         try:
-            result = await asyncio.to_thread(tool.handler, call.arguments, self._tool_context)
+            contexto = self._tool_context_for(session)
+            result = await asyncio.to_thread(
+                tool.handler, call.arguments, contexto
+            )
         except ToolError as exc:
             result = ToolResult.failure(str(exc))
         except Exception as exc:  # pragma: no cover - depende do ambiente

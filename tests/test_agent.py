@@ -19,6 +19,7 @@ from gaia.agent.providers.base import (
 )
 from gaia.agent.providers.openai_compat import OpenAICompatibleProvider
 from gaia.agent.runtime import AgentClient
+from gaia.agent.session import SessionPolicy
 from gaia.agent.tools import ToolContext, build_tools
 from gaia.agent.tools.filesystem import edit, grep, read, write
 from gaia.agent.types import ChatMessage, ModelRef, ToolCall
@@ -614,3 +615,100 @@ def test_sem_scope_nao_restringe(tmp_path):
     """Sem escopo o comportamento antigo continua (allow_outside_project manda)."""
     ctx = ToolContext(tmp_path, allow_outside_project=True, scope="")
     assert ctx.resolve("/tmp").is_absolute()
+
+
+# ------------------------------------------------- politica por sessao (bot)
+async def test_policy_restringe_ferramenta(tmp_path, isolated_env):
+    """A allowlist da sessao vale de verdade, nao so no prompt."""
+    client = _client(tmp_path, isolated_env)
+    client.cfg.agent.auto_approve = True
+    ws = tmp_path / "donna"
+    ws.mkdir()
+    provider = ScriptedProvider(
+        [
+            [ToolCallDelta(0, "c1", "bash", '{"command": "pwd"}'), Finish("tool_calls")],
+            [TextDelta("ok"), Finish("stop")],
+        ]
+    )
+    client._provider = provider
+    session = await client.create_session("donna")
+    client.set_session_policy(
+        session.id,
+        SessionPolicy(tools=("read",), directory=str(ws), scope=str(ws), bot="donna"),
+    )
+    fila = client.subscribe_session(session.id)
+    try:
+        await client.prompt_async(session.id, "roda pwd")
+        await _consumir_turno(fila)
+        tool_msg = provider.requests[1].messages[-1]
+        assert tool_msg.role == "tool"
+        assert "indisponivel" in tool_msg.content
+    finally:
+        client.unsubscribe_session(session.id, fila)
+        await client.aclose()
+
+
+async def test_policy_aplica_diretorio_e_escopo(tmp_path, isolated_env):
+    """O cwd do bash e o teto do read vem da politica, nao do processo."""
+    client = _client(tmp_path, isolated_env)
+    client.cfg.agent.auto_approve = True
+    ws = tmp_path / "donna"
+    ws.mkdir()
+    (ws / "cap.md").write_text("capitulo", encoding="utf-8")
+    fora = tmp_path / "ada"
+    fora.mkdir()
+    provider = ScriptedProvider(
+        [
+            [
+                ToolCallDelta(0, "c1", "read", json.dumps({"path": str(fora / "x.md")})),
+                Finish("tool_calls"),
+            ],
+            [TextDelta("ok"), Finish("stop")],
+        ]
+    )
+    client._provider = provider
+    session = await client.create_session("donna")
+    client.set_session_policy(
+        session.id, SessionPolicy(tools=("read",), directory=str(ws), scope=str(ws))
+    )
+    fila = client.subscribe_session(session.id)
+    try:
+        await client.prompt_async(session.id, "le")
+        await _consumir_turno(fila)
+        tool_msg = provider.requests[1].messages[-1]
+        assert tool_msg.role == "tool"
+        assert "escopo" in tool_msg.content
+    finally:
+        client.unsubscribe_session(session.id, fila)
+        await client.aclose()
+
+
+async def test_policy_sobrevive_ao_reload(tmp_path, isolated_env):
+    """Sessao retomada do disco nao volta a ter todas as ferramentas."""
+    client = _client(tmp_path, isolated_env)
+    session = await client.create_session("donna")
+    client.set_session_policy(session.id, SessionPolicy(tools=("read",), bot="donna"))
+    sid = session.id
+    await client.aclose()
+
+    outro = _client(tmp_path, isolated_env)
+    try:
+        recarregada = outro._session(sid)
+        assert recarregada is not None
+        assert recarregada.policy is not None
+        assert recarregada.policy.tools == ("read",)
+        assert recarregada.policy.bot == "donna"
+    finally:
+        await outro.aclose()
+
+
+async def test_sem_policy_continua_com_todas_as_ferramentas(tmp_path, isolated_env):
+    """O caminho antigo (Gaia) nao muda de comportamento."""
+    client = _client(tmp_path, isolated_env)
+    info = await client.create_session("gaia")
+    try:
+        sessao = client._session(info.id)
+        assert sessao is not None
+        assert client._allowed_tools_for(sessao, None) == set(client.tools.names())
+    finally:
+        await client.aclose()
