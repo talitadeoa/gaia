@@ -205,6 +205,7 @@ class BacklogService:
         title: str,
         items: list[tuple[str, bool]],
         now: datetime | None = None,
+        prune: bool = True,
     ) -> dict[str, int]:
         """Grava os itens da pagina preservando o estado de cada um.
 
@@ -216,15 +217,23 @@ class BacklogService:
 
         Itens que ja existem tem o titulo/estado de origem atualizados, mas
         **nunca** voltam de ``pr`` para ``pending``: o despacho e mais forte
-        que a marcacao da pagina. Item que sumiu da pagina continua aqui: quem
-        decide apagar o grupo e a reconciliacao da fachada (pagina apagada).
+        que a marcacao da pagina.
+
+        ``prune=True`` espelha a pagina tambem no nivel do item: linha que
+        sumiu da pagina (ou foi reescrita, mudando o texto) sai do backlog. Sem
+        isso o card guardaria para sempre o que a pessoa apagou. Ficam de fora
+        ``pr``/``done`` (historico do PR aberto, ja escondido por
+        ``prune_days``) e o chamador desliga o prune quando truncou a pagina em
+        ``max_items`` -- ali o que falta nao e remocao, e corte.
         """
         momento = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
         inseridos = 0
         atualizados = 0
+        vistos: set[str] = set()
         with self.store._lock, self._conn() as conn:
             for texto, concluido in items:
                 marca = fingerprint(texto)
+                vistos.add(marca)
                 row = conn.execute(
                     "SELECT id, status, source_done, finished_at FROM backlog_items "
                     "WHERE source = 'agenda' AND project = ? AND fingerprint = ?",
@@ -278,7 +287,35 @@ class BacklogService:
                     (*campos.values(), int(row["id"])),
                 )
                 atualizados += 1
-        return {"inserted": inseridos, "updated": atualizados, "total": len(items)}
+            removidos = 0
+            if prune:
+                removidos = self._apagar_ausentes(conn, project, vistos)
+        return {
+            "inserted": inseridos,
+            "updated": atualizados,
+            "removed": removidos,
+            "total": len(items),
+        }
+
+    @staticmethod
+    def _apagar_ausentes(
+        conn: sqlite3.Connection, project: str, vistos: set[str]
+    ) -> int:
+        """Linhas do grupo que nao estao mais na pagina (preserva pr/done)."""
+        rows = conn.execute(
+            "SELECT id, fingerprint, status FROM backlog_items "
+            "WHERE source = 'agenda' AND project = ?",
+            (str(project),),
+        ).fetchall()
+        alvos = [
+            int(row["id"])
+            for row in rows
+            if str(row["fingerprint"]) not in vistos
+            and str(row["status"]) not in CONCLUDED
+        ]
+        for item_id in alvos:
+            conn.execute("DELETE FROM backlog_items WHERE id = ?", (item_id,))
+        return len(alvos)
 
     # ------------------------------------------------------ reconciliacao
     def known_projects(self) -> set[str]:

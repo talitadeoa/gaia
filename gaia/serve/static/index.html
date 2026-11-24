@@ -910,10 +910,18 @@ async function sincronizarBacklog(botao) {
   botao.textContent = "consultando…";
   try {
     const resultado = await api("/backlog/sync", { method: "POST", body: "{}" });
-    aviso("success",
-      "backlog: " + (resultado.pages || 0) + " pagina(s), "
-      + (resultado.inserted || 0) + " novo(s), "
-      + (resultado.updated || 0) + " atualizado(s).");
+    // O sync agora espelha a Agenda: grava, move (renome) e apaga (pagina
+    // removida, linha removida). A mensagem diz o que mudou, senao a pessoa
+    // clica em "atualizar" e nao entende por que a lista encolheu.
+    const partes = [
+      (resultado.pages || 0) + " pagina(s)",
+      (resultado.inserted || 0) + " novo(s)",
+      (resultado.updated || 0) + " atualizado(s)",
+    ];
+    if (resultado.removed) partes.push((resultado.removed) + " removido(s)");
+    if (resultado.moved) partes.push((resultado.moved) + " grupo(s) renomeado(s)");
+    if (resultado.purged) partes.push((resultado.purged) + " grupo(s) sem pagina removido(s)");
+    aviso("success", "backlog: " + partes.join(", ") + ".");
     await carregarBacklog();
   } catch (erro) {
     if (erro.status === 401) { tratar401(erro); return; }

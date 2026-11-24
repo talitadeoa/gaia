@@ -153,9 +153,9 @@ def test_schema_v10_indexa_por_projeto(store):
 def test_sync_grava_itens_e_nao_duplica(service):
     itens = [("fazer a", False), ("fazer b", True)]
     primeiro = service.sync_page(page_id="p1", project="gaia", title="gaia backlog", items=itens)
-    assert primeiro == {"inserted": 2, "updated": 0, "total": 2}
+    assert primeiro == {"inserted": 2, "updated": 0, "removed": 0, "total": 2}
     segundo = service.sync_page(page_id="p1", project="gaia", title="gaia backlog", items=itens)
-    assert segundo == {"inserted": 0, "updated": 2, "total": 2}
+    assert segundo == {"inserted": 0, "updated": 2, "removed": 0, "total": 2}
     itens_pagina = service.list_items(page_id="p1")
     assert [i["title"] for i in itens_pagina] == ["fazer a", "fazer b"]
     # Concluido na pagina nasce "done" (a limpeza pode agir).
@@ -189,6 +189,47 @@ def test_desmarcar_na_pagina_volta_de_done_para_pending(service):
     )
     atual = service.get(int(item["id"]))
     assert atual is not None and atual["status"] == "pending"
+
+
+def test_linha_apagada_da_pagina_sai_do_backlog(service):
+    """Espelhar o item, nao so o grupo: editar/apagar linha tambem reflete.
+
+    Era o outro lado do 'zaya': 19 linhas na pagina e 64 no banco, porque a
+    sincronizacao so sabia somar.
+    """
+    service.sync_page(
+        page_id="p1",
+        project="gaia",
+        title="gaia backlog",
+        items=[("um", False), ("dois", False), ("tres", False)],
+    )
+    resultado = service.sync_page(
+        page_id="p1", project="gaia", title="gaia backlog", items=[("um", False), ("tres", False)]
+    )
+    assert resultado["removed"] == 1
+    assert [i["title"] for i in service.list_items()] == ["um", "tres"]
+
+
+def test_pr_aberto_sobrevive_a_linha_apagada(service):
+    """Historico do despacho nao some quando a pessoa limpa a pagina."""
+    service.sync_page(page_id="p1", project="gaia", title="gaia backlog", items=[("x", False)])
+    item = service.list_items()[0]
+    service.mark_pr(int(item["id"]), pr_url="https://github.com/o/r/pull/1", pr_number=1)
+    resultado = service.sync_page(page_id="p1", project="gaia", title="gaia backlog", items=[])
+    assert resultado["removed"] == 0
+    assert service.get(int(item["id"]))["status"] == "pr"
+
+
+def test_pagina_truncada_nao_remove_o_que_foi_cortado(service):
+    """Corte por `max_items` nao e remocao: o item nao pode sumir do card."""
+    service.sync_page(
+        page_id="p1", project="gaia", title="gaia backlog", items=[("a", False), ("b", False)]
+    )
+    resultado = service.sync_page(
+        page_id="p1", project="gaia", title="gaia backlog", items=[("a", False)], prune=False
+    )
+    assert resultado["removed"] == 0
+    assert len(service.list_items()) == 2
 
 
 def test_item_de_chat_nao_duplica(service):

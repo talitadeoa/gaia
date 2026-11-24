@@ -217,6 +217,9 @@ class BacklogMixin(OrchestratorContract):
             self.ui.success(
                 f"backlog: {resultado['pages']} pagina(s), "
                 f"{resultado['inserted']} novo(s), {resultado['updated']} atualizado(s)"
+                f"{', ' + str(resultado['removed']) + ' removido(s)' if resultado.get('removed') else ''}"
+                f"{', ' + str(resultado['moved']) + ' grupo(s) renomeado(s)' if resultado.get('moved') else ''}"
+                f"{', ' + str(resultado['purged']) + ' grupo(s) sem pagina' if resultado.get('purged') else ''}"
             )
             return
         if sub in {"add", "novo", "adicionar"}:

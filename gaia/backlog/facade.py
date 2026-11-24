@@ -176,9 +176,9 @@ class BacklogFacade:
         itens novos (pending) e perderia o vinculo com o PR aberto.
         """
         service = self.service()
-        encontradas = inseridos = atualizados = total = 0
+        encontradas = inseridos = atualizados = removidos = total = 0
         atuais: dict[str, dict[str, Any]] = {}
-        paginas_backlog: list[tuple[str, str, str, list[tuple[str, bool]]]] = []
+        paginas_backlog: list[tuple[str, str, str, list[tuple[str, bool]], bool]] = []
         for pagina in paginas:
             title = str(pagina.get("title") or "")
             projeto, casou = project_from_title(title, self.cfg.agenda_suffix)
@@ -186,9 +186,10 @@ class BacklogFacade:
                 continue
             page_id = str(pagina.get("id") or "")
             itens = items_from_content(str(pagina.get("content") or ""))
-            if len(itens) > int(self.cfg.max_items):
+            truncado = len(itens) > int(self.cfg.max_items)
+            if truncado:
                 itens = itens[: int(self.cfg.max_items)]
-            paginas_backlog.append((page_id, projeto, title, itens))
+            paginas_backlog.append((page_id, projeto, title, itens, truncado))
             atuais[projeto] = {
                 "page_id": page_id,
                 "fingerprints": {fingerprint(texto) for texto, _ in itens},
@@ -203,24 +204,29 @@ class BacklogFacade:
                 # de existir (os itens agora sao do novo).
                 atuais.pop(projeto, None)
 
-        for page_id, projeto, title, itens in paginas_backlog:
+        for page_id, projeto, title, itens, truncado in paginas_backlog:
             resultado = service.sync_page(
                 page_id=page_id,
                 project=projeto,
                 title=title,
                 items=itens,
+                # Pagina cortada em `max_items`: o que falta e corte, nao linha
+                # apagada -- nao pode sumir do card.
+                prune=not truncado,
             )
             encontradas += 1
             inseridos += int(resultado["inserted"])
             atualizados += int(resultado["updated"])
+            removidos += int(resultado.get("removed") or 0)
             total += int(resultado["total"])
         self._marcar_lida()
         logger.info(
             "backlog: %d pagina(s), %d item(ns) novos, %d atualizados, "
-            "%d movidos, %d purgado(s)",
+            "%d removidos, %d movidos, %d purgado(s)",
             encontradas,
             inseridos,
             atualizados,
+            removidos,
             movidos,
             purgados,
         )
@@ -229,6 +235,7 @@ class BacklogFacade:
             "pages": encontradas,
             "inserted": inseridos,
             "updated": atualizados,
+            "removed": removidos,
             "moved": movidos,
             "purged": purgados,
             "items": total,
