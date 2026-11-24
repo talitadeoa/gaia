@@ -120,22 +120,30 @@ cmd_serve() {
   case "$acao" in
     install)
       local origem="$LOCAL_REPO/deploy/gaia-serve.service"
+      local temporario=""
       if [ "${2:-}" = "--tailnet" ]; then
         origem="$LOCAL_REPO/deploy/gaia-serve-tailnet.service.example"
         # Escutar no tailnet so faz sentido com token: sem ele o serve nega
         # o bind (e o systemd entraria em loop de reinicio).
         "${SSH[@]}" "grep -q '^GAIA_SERVE_TOKEN=.\\+' ~/.config/gaia/.env" \
           || die "sem GAIA_SERVE_TOKEN em ~/.config/gaia/.env (a variante tailnet exige token)"
-        local ip_tailnet ip_unidade
+        # O molde do repo nao carrega IP (o repo e publico): o IP do tailnet
+        # desta maquina entra aqui, e o que vai para o mini e a versao cheia.
+        local ip_tailnet
         ip_tailnet=$("${SSH[@]}" 'tailscale ip -4 | head -1')
-        ip_unidade=$(awk -F'--host ' '/^ExecStart=/{print $2; exit}' "$origem")
-        [ "$ip_tailnet" = "$ip_unidade" ] \
-          || die "unidade escuta em '$ip_unidade' mas o tailnet do mini e '$ip_tailnet'"
+        [ -n "$ip_tailnet" ] || die "tailnet sem IPv4 no mini (rode 'tailscale up')"
+        temporario="$(mktemp -d)"
+        sed "s/__TAILNET_IP__/$ip_tailnet/g" "$origem" > "$temporario/$SERVE_UNIT" \
+          || die "falha ao preencher o IP na unidade"
+        grep -q '__TAILNET_IP__' "$temporario/$SERVE_UNIT" \
+          && die "unidade com __TAILNET_IP__ sobrando: $origem"
+        origem="$temporario/$SERVE_UNIT"
       fi
       info "instalando $SERVE_UNIT (sem ligar)"
       "${SSH[@]}" "mkdir -p ~/.config/systemd/user" || die "sem ~/.config/systemd/user"
       scp -q "$origem" "$HOST:~/.config/systemd/user/$SERVE_UNIT" \
         || die "falha ao copiar a unidade"
+      [ -z "$temporario" ] || rm -rf "$temporario"
       "${SSH[@]}" "systemctl --user daemon-reload" || die "daemon-reload falhou"
       printf 'unidade instalada (inativa). Para trocar de dono do Telegram:\n'
       printf '  gmin serve cutover\n'

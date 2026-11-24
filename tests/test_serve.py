@@ -254,7 +254,7 @@ def test_token_obrigatorio_quando_configurado():
 
 def test_bind_na_rede_sem_token_e_recusado():
     with pytest.raises(ServeConfigError, match="GAIA_SERVE_TOKEN"):
-        ServeServer(FakeTarget(), RemoteUI(), host="100.66.45.57", port=0)
+        ServeServer(FakeTarget(), RemoteUI(), host="203.0.113.10", port=0)
 
 
 def _ler_evento(resposta, limite: int = 12) -> dict | None:

@@ -222,9 +222,9 @@ def test_resolver_de_host_porta_token_prioriza_a_cli():
 
     cfg = Config()
     args = type(
-        "Args", (), {"host": "100.66.45.57", "port": 9000, "token": "x"}
+        "Args", (), {"host": "203.0.113.10", "port": 9000, "token": "x"}
     )()
-    assert _resolver(cfg, args) == ("100.66.45.57", 9000, "x", "")
+    assert _resolver(cfg, args) == ("203.0.113.10", 9000, "x", "")
 
     vazio = type("Args", (), {"host": None, "port": None, "token": None})()
     assert _resolver(cfg, vazio) == ("127.0.0.1", 8787, "", "")
@@ -346,7 +346,7 @@ def test_serve_command_recusa_bind_na_rede_sem_token(monkeypatch):
         (),
         {
             "verbose": False,
-            "host": "100.66.45.57",
+            "host": "203.0.113.10",
             "port": 0,
             "token": None,
             "no_telegram": True,

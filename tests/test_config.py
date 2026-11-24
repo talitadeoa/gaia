@@ -285,14 +285,14 @@ def test_serve_loopback_nunca_exige_token(host):
 
 
 def test_serve_recusa_escuta_na_rede_sem_token():
-    assert ServeConfig(host="100.66.45.57").remote_bind_without_token() is True
+    assert ServeConfig(host="203.0.113.10").remote_bind_without_token() is True
     assert (
-        ServeConfig(host="100.66.45.57", allow_remote=True).remote_bind_without_token()
+        ServeConfig(host="203.0.113.10", allow_remote=True).remote_bind_without_token()
         is True
     )
     assert (
         ServeConfig(
-            host="100.66.45.57", allow_remote=True, token="segredo"
+            host="203.0.113.10", allow_remote=True, token="segredo"
         ).remote_bind_without_token()
         is False
     )
@@ -301,14 +301,14 @@ def test_serve_recusa_escuta_na_rede_sem_token():
 def test_serve_vem_do_ambiente():
     cfg = Config.load(
         env={
-            "GAIA_SERVE_HOST": "100.66.45.57",
+            "GAIA_SERVE_HOST": "203.0.113.10",
             "GAIA_SERVE_PORT": "9000",
             "GAIA_SERVE_TOKEN": "abc",
             "GAIA_SERVE_ALLOW_REMOTE": "true",
             "GAIA_SERVE_INSTANCE_ID": "mini",
         }
     )
-    assert cfg.serve.host == "100.66.45.57"
+    assert cfg.serve.host == "203.0.113.10"
     assert cfg.serve.port == 9000
     assert cfg.serve.token == "abc"
     assert cfg.serve.allow_remote is True

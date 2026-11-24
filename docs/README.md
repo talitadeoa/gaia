@@ -36,6 +36,7 @@ estado atual. O status abaixo foi verificado no código.
 | [`plans/2026-11-24-rotinas-continuas.md`](plans/2026-11-24-rotinas-continuas.md) | **implementado**: rotinas contínuas (boot/laço/evento/varredura) no painel, com tabela `routines` (schema v9) e gate único; as futuras entram com um `Routine(...)` |
 | [`plans/2026-11-24-automacoes-pelo-chat.md`](plans/2026-11-24-automacoes-pelo-chat.md) | **implementado**: ferramenta `criar_automacao` cria automação real (id `user:*`, schema v11) a partir de linguagem natural, com confiança por regras (alta ativa, média pausada, baixa reformula) |
 | [`plans/2026-11-23-mini-git-sync.md`](plans/2026-11-23-mini-git-sync.md) | **implementado**: o mini é clone git e `gaia-deploy.timer` (5 min) faz `fetch` + `reset --hard origin/main` + restart; `.git` sem `config` e `pth` órfão de `zaya` corrigidos |
+| [`plans/2026-11-24-privacidade-repo-publico.md`](plans/2026-11-24-privacidade-repo-publico.md) | **fase 1 aplicada** (IPs/tailnet fora dos docs e das unidades; `gmin serve install --tailnet` preenche `__TAILNET_IP__`). Fases 2–7 pendentes: perfil de vagas, nome de quem usa, defaults de estudos/backlog, caminhos do SO, histórico do git e fixture de áudio |
 
 ## Specs e análises
 
