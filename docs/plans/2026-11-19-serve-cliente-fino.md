@@ -47,7 +47,7 @@ vez de desenhar **serializa eventos**. O cliente fino só sabe desenhar.
 ## 3. Arquitetura
 
 ```text
-mini 100.66.45.57 (dono do estado)              clientes (sem estado)
+mini 100.x.y.z (dono do estado)              clientes (sem estado)
 ┌──────────────────────────────────┐            ┌───────────────────────────┐
 │ gaia serve                       │   SSE      │ gaia --remote  (Rich)     │
 │   Orchestrator (prompt, tools,   │◄──────────►│ web (HTML + SSE)          │

@@ -10,14 +10,6 @@ from gaia.config import Config
 from gaia.control.settings import effective, remove_env_override, update
 
 
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    return Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
-
-
 def _campos(cfg, env=None):
     return {
         (secao["section"], campo["key"]): campo

@@ -21,8 +21,9 @@ Nada aqui executa rotina: quem chama os handlers e o ``_scheduler_loop``.
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -40,6 +41,11 @@ MISSED_TOLERANCE_MINUTES = 20
 RETRYABLE_ERRORS = frozenset({"network", "unknown"})
 RETRY_MAX_LIMIT = 10
 RETRY_BACKOFF_LIMIT_MINUTES = 720.0
+
+# Prefixo dos ids das automacoes criadas pelo chat (gaia/controller/
+# automation_builder.py). Elas nao tem descritor no registry: a linha da tabela
+# e a fonte completa (skill, nome, horario e parametros).
+USER_PREFIX = "user:"
 
 _DAY_NAMES = ("seg", "ter", "qua", "qui", "sex", "sab", "dom")
 _HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -80,6 +86,12 @@ class Automation:
     # Campos que so existem na tabela; guardados para o painel nao mentir.
     last_result: str = ""
     updated_at: str = ""
+    # Parametros do handler (automacoes `user:*` criadas pelo chat). Vazio nas
+    # do registry: nelas quem manda e a config.
+    params: dict[str, Any] = field(default_factory=dict)
+    # Bot dono da automacao (design §4.5). Vazio = `gaia`, o comportamento de
+    # antes dos bots; a coluna da tabela vem depois do seed.
+    bot: str = ""
 
     def claim_key(self, day: datetime) -> str:
         """Chave de ``claim_meta`` equivalente a usada pela rotina real."""
@@ -218,6 +230,8 @@ def describe(cfg: Config) -> list[Automation]:
     """Agenda declarada, derivada do config atual (semente da tabela).
 
     A ordem segue a do dia real: briefing, carteira, vagas, memoria/sonho.
+    ``bot`` e o dono de cada automacao: a tela agrupa por ele e o scheduler so
+    bloqueia a automacao do bot ocupado (design §4.5).
     """
     briefing = cfg.briefing
     career = cfg.career
@@ -234,6 +248,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="briefing:{day}",
             slot="morning",
             enabled_path="briefing.enabled",
+            bot="gaia",
         ),
         Automation(
             id="briefing:noon",
@@ -246,6 +261,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="briefing:{day}",
             slot="noon",
             enabled_path="briefing.enabled",
+            bot="gaia",
         ),
         Automation(
             id="briefing:evening",
@@ -258,6 +274,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="briefing:{day}",
             slot="evening",
             enabled_path="briefing.evening_enabled",
+            bot="gaia",
         ),
         Automation(
             id="market:watchlist",
@@ -266,9 +283,13 @@ def describe(cfg: Config) -> list[Automation]:
             days=tuple(briefing.market_days),
             at=briefing.market_at,
             until=briefing.market_until,
-            delivery="telegram",
+            # O painel e a entrega principal; o Telegram, quando ligado, recebe
+            # o mesmo texto (design §4.5a).
+            delivery="local",
             claim_prefix="briefing:market:{day}",
             enabled_path="briefing.market_enabled",
+            # A carteira e da Ariana e e deterministica (sem modelo).
+            bot="ariana",
         ),
         Automation(
             id="career:weekly",
@@ -280,6 +301,8 @@ def describe(cfg: Config) -> list[Automation]:
             delivery="telegram",
             claim_prefix="career:{day}",
             enabled_path="career.enabled",
+            # CV e vagas sao da Sabrina; a rotina continua sem modelo.
+            bot="sabrina",
         ),
         Automation(
             id="memory:daily",
@@ -292,6 +315,7 @@ def describe(cfg: Config) -> list[Automation]:
             claim_prefix="memory:{day}",
             done_prefix="memory_consolidated:{day}",
             enabled_path="memory.enabled",
+            bot="gaia",
         ),
         Automation(
             id="memory:dream",
@@ -305,6 +329,7 @@ def describe(cfg: Config) -> list[Automation]:
             done_prefix="memory_dreamed:{day}",
             enabled_path="memory.dream_enabled",
             opportunistic=True,
+            bot="gaia",
         ),
     ]
     return itens
@@ -330,6 +355,7 @@ def _row_payload(item: Automation) -> dict[str, Any]:
         "retry_max": item.retry_max,
         "retry_backoff_minutes": item.retry_backoff_minutes,
         "last_result": item.last_result,
+        "bot": item.bot,
     }
 
 
@@ -371,6 +397,18 @@ def seed(cfg: Config, store: MemoryStore | None = None) -> int:
     return criadas
 
 
+def _parse_params(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not raw:
+        return {}
+    try:
+        valor = json.loads(str(raw))
+    except (TypeError, ValueError):
+        return {}
+    return dict(valor) if isinstance(valor, dict) else {}
+
+
 def load(cfg: Config, store: MemoryStore | None = None) -> list[Automation]:
     """Agenda efetiva: a tabela manda; o config so preenche quando falta.
 
@@ -385,10 +423,35 @@ def load(cfg: Config, store: MemoryStore | None = None) -> list[Automation]:
         return list(derivadas.values())
     itens: list[Automation] = []
     for linha in linhas:
-        base = derivadas.get(str(linha["id"]))
+        automation_id = str(linha["id"])
+        base = derivadas.get(automation_id)
         if base is None:
-            # Linha orfa (skill removida do registry): preserva visivel no
-            # painel? Nao: sem handler nao ha o que executar. Ignora.
+            if not automation_id.startswith(USER_PREFIX):
+                # Linha orfa do registry (skill removida num deploy): sem
+                # handler nao ha o que executar. Ignora.
+                continue
+            # Automacao do chat: a propria linha e o descritor.
+            itens.append(
+                Automation(
+                    id=automation_id,
+                    skill=str(linha.get("skill") or ""),
+                    name=str(linha.get("name") or automation_id),
+                    days=_parse_days(linha.get("days")),
+                    at=str(linha.get("at") or ""),
+                    until=str(linha.get("until") or linha.get("at") or ""),
+                    delivery=str(linha.get("delivery") or "local"),
+                    claim_prefix=f"automation:{automation_id}:{{day}}",
+                    enabled=bool(linha.get("enabled")),
+                    retry_max=int(linha.get("retry_max") or 0),
+                    retry_backoff_minutes=float(
+                        linha.get("retry_backoff_minutes") or 0.0
+                    ),
+                    last_result=str(linha.get("last_result") or ""),
+                    updated_at=str(linha.get("updated_at") or ""),
+                    params=_parse_params(linha.get("params")),
+                    bot=str(linha.get("bot") or "gaia"),
+                )
+            )
             continue
         itens.append(
             Automation(
@@ -411,6 +474,8 @@ def load(cfg: Config, store: MemoryStore | None = None) -> list[Automation]:
                 ),
                 last_result=str(linha.get("last_result") or ""),
                 updated_at=str(linha.get("updated_at") or ""),
+                params=_parse_params(linha.get("params")),
+                bot=str(linha.get("bot") or base.bot or "gaia"),
             )
         )
     # Automacoes do registry que ainda nao foram semeadas continuam valendo:
@@ -433,7 +498,7 @@ def update(
     Levanta ``ValueError`` para payload invalido e ``KeyError`` para id
     desconhecido (o transporte traduz em 422/404).
     """
-    if find(cfg, automation_id) is None:
+    if find_loaded(cfg, store, automation_id) is None:
         raise KeyError(automation_id)
     campos = validate_payload(payload)
     if not campos:
@@ -584,6 +649,8 @@ def render(
         "until": item.until,
         "delivery": item.delivery,
         "enabled": _enabled(cfg, item),
+        # Bot dono (o painel agrupa e o rail mostra a atividade dele).
+        "bot": item.bot or "gaia",
         # Duas coisas diferentes, e a tela precisa das duas: `paused` e a
         # decisao da pessoa (tabela, o checkbox que ela acabou de clicar) e
         # `enabled` e o resultado final (pausada OU skill desligada no config).

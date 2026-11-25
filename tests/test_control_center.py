@@ -10,26 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
-from gaia.config import Config
 from gaia.control.center import ControlCenter
-from gaia.memory.store import MemoryStore
-
-
-@pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    return Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
 
 
 class _Tarefa:

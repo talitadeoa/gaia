@@ -58,9 +58,9 @@ def test_parser_serve_defaults():
 
 def test_parser_serve_flags():
     args = build_parser().parse_args(
-        ["serve", "--host", "100.66.45.57", "--port", "9000", "--no-telegram"]
+        ["serve", "--host", "203.0.113.10", "--port", "9000", "--no-telegram"]
     )
-    assert args.host == "100.66.45.57"
+    assert args.host == "203.0.113.10"
     assert args.port == 9000
     assert args.no_telegram is True
 

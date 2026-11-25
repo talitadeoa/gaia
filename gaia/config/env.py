@@ -285,6 +285,7 @@ _PROVIDER_API_KEYS: dict[str, tuple[str, ...]] = {
     "claude": ("ANTHROPIC_API_KEY",),
     "commandcode": ("COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"),
     "commandcode-anthropic": ("COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"),
+    "opendesign": ("OPENDESIGN_API_KEY", "OPEN_DESIGN_API_KEY"),
     "opencode": ("OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"),
     "groq": ("GROQ_API_KEY",),
     "mistral": ("MISTRAL_API_KEY",),

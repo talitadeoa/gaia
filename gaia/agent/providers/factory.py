@@ -84,6 +84,20 @@ PRESETS: dict[str, Preset] = {
         ambient=True,
         default_model="claude-haiku-4-5-20251001",
     ),
+    # OpenDesign (gateway compatível com OpenAI, o mesmo do pi).
+    # A chave é a do pi (`~/.pi/agent/auth.json`) ou OPENDESIGN_API_KEY.
+    "opendesign": Preset(
+        api="openai",
+        base_url="https://amr-link.open-design.ai/v1",
+        env_keys=("OPENDESIGN_API_KEY", "OPEN_DESIGN_API_KEY"),
+        auth_file=("~/.pi/agent/auth.json",),
+        auth_key_path=("opendesign", "key"),
+        ambient=True,
+        default_model="deepseek-v4.1-flash",
+        # O gateway tem a variante barata do MESMO modelo ("eco"): mesma
+        # janela e mesmas ferramentas, custo menor no pedido curto.
+        fast_model="deepseek-v4.1-flash-eco",
+    ),
     # OpenCode Zen (gateway compativel com OpenAI).
     "opencode": Preset(
         api="openai",
@@ -120,6 +134,8 @@ ALIASES = {
     "commandcode-claude": "commandcode-anthropic",
     "cc-claude": "commandcode-anthropic",
     "zen": "opencode",
+    "od": "opendesign",
+    "open-design": "opendesign",
     "grok": "xai",
 }
 
@@ -138,6 +154,7 @@ def normalize_provider(value: str) -> str:
 SHORTCUTS: dict[str, tuple[str, str]] = {
     "cc": ("commandcode", ""),
     "ds": ("deepseek", "deepseek-flash"),
+    "od": ("opendesign", "deepseek-v4.1-flash"),
     "zen": ("opencode", ""),
     "glm": ("commandcode", "z-ai/glm-5.3-flash"),
     "turbo": ("commandcode", "deepseek/deepseek-v4.1-flash-fast"),

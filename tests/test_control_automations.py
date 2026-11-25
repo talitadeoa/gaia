@@ -6,7 +6,6 @@ from datetime import datetime
 
 import pytest
 
-from gaia.config import Config
 from gaia.control.automations import (
     MISSED_TOLERANCE_MINUTES,
     describe,
@@ -17,25 +16,9 @@ from gaia.control.automations import (
     next_run,
     status,
 )
-from gaia.memory.store import MemoryStore
 
 # 23/11/2026 e uma segunda-feira (0 = segunda).
 SEGUNDA = datetime(2026, 11, 23, 8, 0).astimezone()
-
-
-@pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    return Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
 
 
 def _item(cfg, automation_id):

@@ -35,8 +35,6 @@ from gaia.backlog.job import (
 )
 from gaia.backlog.service import BacklogService, fingerprint
 from gaia.backlog.worker import BacklogWorker
-from gaia.config import Config
-from gaia.memory.store import MemoryStore
 from gaia.pi.runner import PiResult
 
 # ---------------------------------------------------------------- extracao ---
@@ -90,21 +88,6 @@ def test_fingerprint_ignora_caixa_acento_e_pontuacao():
 
 
 # ------------------------------------------------------------------- banco ---
-
-
-@pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    return Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
 
 
 @pytest.fixture
@@ -989,3 +972,61 @@ def test_rotas_do_backlog_no_servidor(tmp_path, isolated_env):
         assert status == 400 and corpo["error"] == "bad_repo"
     finally:
         servidor.shutdown()
+
+
+# ------------------------------------------------------- Ada no feed (fase 3) ---
+
+
+@pytest.mark.asyncio
+async def test_aviso_do_pr_tambem_vira_feed_da_ada(store):
+    """O PR aberto no backlog alimenta o feed da Ada (design §7, item 13).
+
+    O Telegram continua opcional; o painel e a entrega que sempre existe.
+    """
+    import logging
+
+    from gaia.backlog.job import BacklogResult
+    from gaia.controller.backlog import BacklogMixin
+
+    class _UI:
+        def __init__(self) -> None:
+            self.proativos: list[str] = []
+
+        def proactive(self, texto: str) -> None:
+            self.proativos.append(texto)
+
+        def emit(self, tipo: str, **dados: Any) -> None:
+            return None
+
+    class _Telegram:
+        enabled = False
+
+    stubs = {nome: (lambda *a, **k: None) for nome in BacklogMixin.__abstractmethods__}
+    Concreta = type("FakeBacklog", (BacklogMixin,), stubs)
+
+    class Fake(Concreta):
+        def __init__(self) -> None:
+            self.store = store
+            self.ui = _UI()
+            self.telegram = _Telegram()
+            self.logger = logging.getLogger("test.backlog.feed")
+            self._feed: list[tuple[str, str, str, str]] = []
+
+        def _routine_on(self, routine_id: str) -> bool:
+            return True
+
+        def bot_message(self, bot, kind="job", title="", text=""):
+            self._feed.append((bot, kind, title, text))
+            return 1
+
+    orch = Fake()
+    resultado = BacklogResult(
+        ok=True, pr_url="https://github.com/o/r/pull/9", pr_number=9
+    )
+    item = {"id": 4, "title": "corrigir login", "project": "gaia"}
+    await orch._backlog_notify("pr", item, resultado)
+
+    assert orch.ui.proativos and "PR pronto" in orch.ui.proativos[0]
+    bot, kind, titulo, texto = orch._feed[0]
+    assert (bot, kind) == ("ada", "job")
+    assert "PR pronto" in titulo and "pull/9" in texto

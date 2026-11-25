@@ -9,7 +9,7 @@
 ## PROMPT
 
 ```
-Objetivo: o mini (host SSH "gaia", IP do tailnet 100.66.45.57, repo em
+Objetivo: o mini (host SSH "gaia", IP do tailnet 100.x.y.z, repo em
 /home/talita/gaia, serviço gaia-serve.service) deve ficar sincronizado com o
 GitHub SEMPRE que houver push na main. Hoje o transporte é `gmin deploy`
 (rsync -a, sem --delete) e o .git do mini está corrompido. Troque por git de
@@ -151,7 +151,7 @@ CRITÉRIOS DE ACEITE (prove com saída de comando, não com afirmação)
 - `ssh gaia 'cd ~/gaia && git status --porcelain'` -> vazio, e
   `git rev-parse HEAD` == `git rev-parse origin/main` == o SHA do Mac.
 - Push novo no Mac: em <= 6 min o mini tem o novo HEAD, o serviço reiniciou e
-  `curl -s http://100.66.45.57:8787/health` responde `ok: true`.
+  `curl -s http://100.x.y.z:8787/health` responde `ok: true`.
 - Push que NÃO muda nada para o mini (ex.: só um doc) continua reiniciando?
   Decida: se o SHA mudou, reinicia (simples e previsível); documente.
 - Commit com erro de import: o timer NÃO derruba o serviço e o HEAD do mini

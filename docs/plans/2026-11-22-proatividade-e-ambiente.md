@@ -39,7 +39,7 @@ importa (o do mini) for apontado para ela. Hoje não é.
 | A | `~/.config/gaia/` (padrão do código) | 143 linhas, sem `[career]`/`[telegram]` | sim, completo | `~/.local/share/gaia/zaya.db` (664 turns, parado 12/11) | **usada só quando `ZAYA_*` não está no shell** |
 | B | `./config` + `./data` do repo (`Abrir Gaia.command`) | 160 linhas, com `[career]`/`[telegram]` | sim, só `DEEPSEEK_API_KEY` + token | `data/gaia.db` (1086 turns, último 17/11 22:26) | TUI local antiga |
 | C | `~/zaya/config` + `~/zaya/data` (**para onde o `.zshrc` aponta**) | **4 linhas**, só `[agent]` | **não existe** | `~/zaya/data/gaia.db` (1 conversa, 0 turns) | **terminal hoje: sem Telegram, sem briefing, sem proatividade** |
-| D | mini `gaia` (`100.66.45.57`) | `~/.config/gaia/config.toml` | sim | `/home/talita/.local/share/gaia/gaia.db` (540 KB, vivo) | **dono real**: `gaia-serve.service` ativo |
+| D | mini `gaia` (`100.x.y.z`) | `~/.config/gaia/config.toml` | sim | `/home/talita/.local/share/gaia/gaia.db` (540 KB, vivo) | **dono real**: `gaia-serve.service` ativo |
 
 `~/.zshrc:164-166`:
 
@@ -366,7 +366,7 @@ ssh gaia "ps aux | grep 'gaia serve' | grep -v grep | wc -l"   # 1
 ps aux | grep -E 'gaia (serve|telegram)' | grep -v grep        # vazio no Mac
 
 # 2) motor saudável
-curl -s http://100.66.45.57:8787/health    # {"ok": true, "model": "commandcode/..."}
+curl -s http://100.x.y.z:8787/health    # {"ok": true, "model": "commandcode/..."}
 
 # 3) proatividade sai no chat (não no alto-falante)
 ssh gaia 'journalctl --user -u gaia-serve.service -n 30 --no-pager | grep -i proativ'

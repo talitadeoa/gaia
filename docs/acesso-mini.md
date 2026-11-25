@@ -13,7 +13,7 @@ tela do tailnet:
 
 ```
 http://gaia:8787/control          # MagicDNS, funciona fora de casa
-http://100.66.45.57:8787/control  # mesmo endereço, sem depender do DNS
+http://100.x.y.z:8787/control    # IP do tailnet (veja 'Fora de casa')
 ```
 
 A tela pede o token do painel (`GAIA_CONTROL_TOKEN`, separado do token do chat)
@@ -63,7 +63,7 @@ o MacBook precisa ter o próprio `gaia serve` rodando, com o banco dele.
 
 ```sshconfig
 Host gaia
-    HostName 192.168.1.10   # IP do mini na sua LAN
+    HostName 192.168.0.10   # IP do mini na LAN; descubra com `gmin doctor`
     User talita
     IdentityFile ~/.ssh/id_ed25519
 ```
@@ -179,10 +179,11 @@ preferência:
 ## Fora de casa
 
 O SSH é só LAN. O acesso remoto é por VPN de malha (Tailscale), **já instalada**
-no mini, no MacBook e no iPhone: o mini tem IP `100.66.45.57` (MagicDNS
-`gaia.tail682866.ts.net`), e o `gaia serve` escuta nesse IP com token. O SSH e a
-web deixam de depender de estar em casa, com ACL por máquina — nada de
-`iptables` manual nem de expor a 22 na internet.
+no mini, no MacBook e no iPhone. O IP do tailnet nao vai no repo (ele e
+publico): descubra com `tailscale ip -4` ou `gmin doctor`, e o `gaia serve`
+escuta nesse IP com token. O MagicDNS (`<host>.<tailnet>.ts.net`) dispensa o
+numero. O SSH e a web deixam de depender de estar em casa, com ACL por maquina
+— nada de `iptables` manual nem de expor a 22 na internet.
 
 Se precisar reinstalar em outra máquina:
 

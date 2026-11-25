@@ -101,9 +101,15 @@ class BriefingMixin(OrchestratorContract):
         trigger: str = "schedule",
         attempt: int = 1,
     ) -> bool:
-        if not self.cfg.briefing.market_enabled or not self.telegram.enabled:
+        """Carteira da Ariana: deterministica e entregue no painel.
+
+        Nao exige Telegram (armadilha do gate duplo do AGENTS.md): num `serve`
+        headless, o resumo vai para o feed do bot e o run guarda o resumo. Com
+        Telegram ligado, sai nos dois lugares. Nenhuma chamada ao modelo.
+        """
+        if not self.cfg.briefing.market_enabled:
             return False
-        return await self._send_market_briefing(now.date())
+        return await self._send_market_briefing(now.date(), trigger=trigger)
 
     async def _send_evening_report(self, day: date, *, trigger: str = "schedule") -> bool:
         """Fecha o dia no Telegram uma vez por dia: feito, nao foi e insight."""
@@ -202,7 +208,7 @@ class BriefingMixin(OrchestratorContract):
         return True
 
     async def _send_market_briefing(self, day: date, *, trigger: str = "schedule") -> bool:
-        """Envia uma vez por dia o resumo da carteira; devolve se enviou agora."""
+        """Monta o resumo da carteira uma vez por dia; devolve se entregou agora."""
         cfg = self.cfg.briefing
         items = self.watchlist.all()
         if not items:
@@ -222,7 +228,8 @@ class BriefingMixin(OrchestratorContract):
             kind="market",
             automation="market:watchlist",
             trigger=trigger,
-            delivery="telegram",
+            delivery="local",
+            bot="ariana",
         ) as run:
             return await self._send_market_body(day, key, items, run)
 
@@ -239,21 +246,33 @@ class BriefingMixin(OrchestratorContract):
             for item, result in zip(items, results, strict=False)
         ]
         text = market_message(day, rows)
-        try:
-            await self.telegram.send_message(text)
-        except Exception as exc:
-            self.logger.warning("briefing: falha ao enviar a bolsa: %s", exc)
-            self.store.delete_meta(key)
-            run.fail(str(exc), "network")
-            return False
-
-        self.store.set_meta(key, datetime.now().astimezone().isoformat(timespec="seconds"))
         indisponiveis = sum(1 for row in rows if row.quote is None)
+        # O painel e a entrega principal (design §4.5a): sem Telegram (mini
+        # headless) o feed e o run continuam com o resumo inteiro.
+        self.bot_message("ariana", "job", "Resumo da carteira", text)
+        enviado = False
+        if getattr(self.telegram, "enabled", False):
+            try:
+                await self.telegram.send_message(text)
+                enviado = True
+            except Exception as exc:
+                self.logger.warning("briefing: falha ao enviar a bolsa: %s", exc)
+                run.fail(str(exc), "network")
+        elif indisponiveis and indisponiveis == len(rows):
+            # Sem Telegram e sem cotacao nenhuma: o feed tem o resumo, mas o
+            # run precisa dizer por que os numeros faltaram (nunca silencio).
+            run.fail(
+                "cotacao indisponivel para "
+                + ", ".join(row.ticker for row in rows),
+                "network",
+            )
+        self.store.set_meta(key, datetime.now().astimezone().isoformat(timespec="seconds"))
         run.detail = (
             f"{len(rows)} ativo(s)"
             + (f", {indisponiveis} sem cotacao" if indisponiveis else "")
+            + (" · telegram" if enviado else " · painel")
         )
-        self.logger.info("resumo da bolsa de %s enviado", day.isoformat())
+        self.logger.info("resumo da bolsa de %s entregue", day.isoformat())
         return True
 
     async def _compose_briefing(self, slot: str, day: date) -> str:

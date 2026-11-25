@@ -17,7 +17,9 @@ import pytest
 from gaia.control import automations as automations_mod
 from gaia.control.automations import Automation, seed
 from gaia.controller.scheduler import SchedulerMixin
-from gaia.memory.store import MemoryStore
+
+# 27/11/2026 e sexta-feira (0 = segunda).
+SEXTA_9H = datetime(2026, 11, 27, 9, 5).astimezone()
 
 # 23/11/2026 e segunda-feira.
 SEGUNDA = datetime(2026, 11, 23, 9, 5).astimezone()
@@ -112,20 +114,8 @@ FakeOrchestrator = _concrete(_Agendador)
 
 
 @pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
-@pytest.fixture
-def cfg(tmp_path, isolated_env):
-    from gaia.config import Config
-
-    carregado = Config.load(
-        config_path=tmp_path / "config.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
+def cfg(cfg):
+    carregado = cfg
     carregado.telegram.enabled = True
     carregado.telegram.bot_token = "1:abc"
     carregado.career.days = [0]
@@ -184,16 +174,23 @@ async def test_automacao_pausada_nao_executa(orch):
     assert orch.store.list_runs(kind="career") == []
 
 
-async def test_motor_ocupado_nao_dispara(orch):
-    seed(orch.cfg, orch.store)
+async def test_motor_ocupado_nao_dispara_a_automacao_do_bot_ativo(cfg, store):
+    """Turno da pessoa bloqueia o bot ativo; os outros bots seguem (fase 3).
+
+    Antes dos bots o `_busy` pulava o ciclo inteiro. Agora a ocupacao e por
+    bot: com a Gaia num turno, o briefing dela espera, mas a pesquisa de
+    vagas (Sabrina) nao.
+    """
+    orch = BotOrch(cfg, store, FakeTelegram())
+    seed(cfg, store)
     orch._busy = True
 
     await orch._scheduler_tick(SEGUNDA)
 
-    assert orch.chamadas == []
-    # A janela nao foi reservada: o proximo tick ocioso ainda pode disparar.
+    assert [c[0] for c in orch.chamadas] == ["career:weekly"]
+    # A janela do briefing nao foi reservada: o proximo tick ocioso dispara.
     assert automations_mod.due(
-        automations_mod.find_loaded(orch.cfg, orch.store, "career:weekly"),
+        automations_mod.find_loaded(orch.cfg, orch.store, "briefing:morning"),
         orch.cfg,
         SEGUNDA,
         orch.store,
@@ -385,3 +382,244 @@ async def test_sem_run_nao_e_falha_nem_retry(orch, cfg, store):
     # A janela foi devolvida: o proximo tick ainda pode executar de verdade.
     item = automations_mod.find_loaded(cfg, store, "career:weekly")
     assert store.get_meta(item.window_key(SEGUNDA)) is None
+
+
+# ---------------------------------------------------------------------------
+# Automacoes criadas pelo chat (id `user:*`): despacho pela skill da tabela
+# ---------------------------------------------------------------------------
+class _AgendadorUsuario(FakeOrchestrator):
+    """Orchestrator minimo que entrega a automacao pelo canal (sem TTS)."""
+
+    def __init__(self, cfg, store, telegram) -> None:
+        super().__init__(cfg, store, telegram)
+        self.cfg = cfg
+        self.entregues: list[str] = []
+
+    async def _say_proactive(self, text: str, count: bool = True) -> None:
+        self.entregues.append(text)
+
+
+@pytest.mark.asyncio
+async def test_automacao_do_chat_executa_no_horario(cfg, store):
+    """O critério de pronto: criar pelo builder e o agendador entregar."""
+    from gaia.controller.automation_builder import propose_automation
+
+    telegram = FakeTelegram()
+    orch = _AgendadorUsuario(cfg, store, telegram)
+    proposta = propose_automation(
+        "toda sexta as 9h me lembre de estudar",
+        cfg,
+        store,
+        now=datetime(2026, 11, 23, 8, 0).astimezone(),
+    )
+    assert proposta.status == "created"
+
+    await orch._scheduler_tick(SEXTA_9H)
+
+    assert orch.entregues == ["Lembrete: Estudar"]
+    run = store.list_runs(kind="reminder")[0]
+    assert run["automation"] == proposta.automation_id
+    assert run["status"] == "completed"
+    # A janela foi reservada: o tick seguinte nao repete.
+    await orch._scheduler_tick(SEXTA_9H + timedelta(minutes=1))
+    assert orch.entregues == ["Lembrete: Estudar"]
+
+
+class _AgendaFalsa:
+    """Agenda minima: uma tarefa pendente e uma feita no dia."""
+
+    enabled = True
+
+    async def notes_on(self, day: str) -> list[dict]:
+        return [
+            {
+                "id": 1,
+                "text": "comprar pao",
+                "is_checkbox": True,
+                "completed": False,
+                "routine_id": None,
+                "parent_id": None,
+                "order": 1,
+                "created_at": "2026-11-27T08:00:00",
+            },
+            {
+                "id": 2,
+                "text": "pagar conta",
+                "is_checkbox": True,
+                "completed": True,
+                "routine_id": None,
+                "parent_id": None,
+                "order": 2,
+                "created_at": "2026-11-27T08:00:00",
+            },
+        ]
+
+
+class _EstudosFalso:
+    enabled = True
+
+    async def results(self) -> list[dict]:
+        return []
+
+    async def goals(self) -> dict:
+        return {"sessionsPerWeek": 4, "minutesPerWeek": 120}
+
+
+@pytest.mark.asyncio
+async def test_automacao_resumo_da_agenda_entrega(cfg, store):
+    from gaia.control.automations import Automation
+
+    orch = _AgendadorUsuario(cfg, store, FakeTelegram())
+    orch.agenda = _AgendaFalsa()  # type: ignore[attr-defined]
+    item = Automation(
+        id="user:resumo-da-agenda",
+        skill="agenda_summary",
+        name="Resumo da agenda",
+        days=(4,),
+        at="09:00",
+        until="10:00",
+        delivery="telegram",
+        params={},
+    )
+    assert await orch._run_automation(item, SEXTA_9H) is True
+    assert "Pendentes: 1" in orch.entregues[0]
+    assert "comprar pao" in orch.entregues[0]
+    assert store.list_runs(kind="agenda_summary")[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_automacao_resumo_de_estudos_entrega(cfg, store):
+    from gaia.control.automations import Automation
+
+    orch = _AgendadorUsuario(cfg, store, FakeTelegram())
+    orch.estudos = _EstudosFalso()  # type: ignore[attr-defined]
+    item = Automation(
+        id="user:resumo-de-estudos",
+        skill="estudos_summary",
+        name="Resumo de estudos",
+        days=(4,),
+        at="20:00",
+        until="21:00",
+        delivery="telegram",
+        params={},
+    )
+    assert await orch._run_automation(item, SEXTA_9H) is True
+    assert "Estudos nesta semana" in orch.entregues[0]
+    assert store.list_runs(kind="estudos_summary")[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_automacao_do_chat_sem_handler_nao_trava(cfg, store):
+    telegram = FakeTelegram()
+    orch = _AgendadorUsuario(cfg, store, telegram)
+    store.upsert_automation(
+        id="user:desconhecida",
+        skill="nao-existe",
+        days="4",
+        at="09:00",
+        until="10:00",
+        name="?",
+    )
+    item = automations_mod.find_loaded(cfg, store, "user:desconhecida")
+    assert item is not None
+    executou = await orch._run_automation(item, SEXTA_9H)
+    assert executou is False
+    assert telegram.enviados == []
+
+
+# ------------------------------------------------- automacao por bot (fase 3) ---
+
+
+class BotOrch(FakeOrchestrator):
+    """Agendador com automacoes de bot: cada uma sabe o dono (`item.bot`)."""
+
+    def __init__(self, cfg, store, telegram) -> None:
+        super().__init__(cfg, store, telegram)
+        self.bots_ocupados: set[str] = set()
+        self.prompts: list[tuple[str, str, str]] = []
+        self.modo_key = "gaia"
+
+    @property
+    def mode_key(self) -> str:  # type: ignore[override]
+        return self.modo_key
+
+    def bot_busy(self, bot_id: str) -> bool:
+        chave = str(bot_id or "")
+        if chave in self.bots_ocupados:
+            return True
+        if chave and chave != self.mode_key:
+            return False
+        return bool(self._busy or self._recording or self._listening)
+
+    async def run_bot_task(self, bot_id, prompt, **kwargs):
+        self.prompts.append((bot_id, prompt, kwargs.get("trigger", "")))
+        return {"ok": True, "text": "feito", "error": ""}
+
+
+async def test_ariana_e_ada_devidas_no_mesmo_minuto_rodam(cfg, store):
+    """Ocupacao e por bot: a Ada ocupada nao impede a Ariana de rodar."""
+    orch = BotOrch(cfg, store, FakeTelegram())
+    seed(cfg, store)
+    for automation_id, bot, prompt in (
+        ("user:revisao-ada", "ada", "revisa o PR"),
+        ("user:resumo-ariana", "ariana", "resume a carteira"),
+    ):
+        store.upsert_automation(
+            id=automation_id,
+            skill="bot_task",
+            name=automation_id,
+            days="0",
+            at="08:00",
+            until="10:00",
+            enabled=True,
+            bot=bot,
+            params={"prompt": prompt},
+        )
+    orch.bots_ocupados = {"ada"}
+
+    await orch._scheduler_tick(SEGUNDA)
+
+    # A Ada foi bloqueada (sessao ocupada); a Ariana rodou no mesmo tick.
+    assert [p[0] for p in orch.prompts] == ["ariana"]
+    assert ("career:weekly", "schedule", 1) in orch.chamadas
+
+
+async def test_bot_task_roda_na_sessao_do_bot_e_devolve_ok(cfg, store):
+    orch = BotOrch(cfg, store, FakeTelegram())
+    seed(cfg, store)
+    item = Automation(
+        id="user:revisao",
+        skill="bot_task",
+        name="Revisao",
+        days=(0,),
+        at="09:05",
+        until="10:00",
+        delivery="local",
+        bot="donna",
+        params={"prompt": "revisa o capitulo 2"},
+    )
+    acao = orch._user_automation_bot_task
+
+    assert await acao(item, SEGUNDA) is True
+    assert orch.prompts == [("donna", "revisa o capitulo 2", "schedule")]
+
+
+async def test_bot_task_falha_devolve_false(cfg, store):
+    orch = BotOrch(cfg, store, FakeTelegram())
+    item = Automation(
+        id="user:revisao",
+        skill="bot_task",
+        name="Revisao",
+        days=(0,),
+        at="09:05",
+        until="10:00",
+        delivery="local",
+        bot="donna",
+        params={"prompt": "revisa"},
+    )
+
+    async def falhar(bot_id, prompt, **kwargs):
+        return {"ok": False, "text": "", "error": "provedor caiu"}
+
+    orch.run_bot_task = falhar  # type: ignore[assignment]
+    assert await orch._user_automation_bot_task(item, SEGUNDA) is False

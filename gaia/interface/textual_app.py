@@ -704,13 +704,18 @@ class GaiaTextualApp(App):
         if text == "/modo" or text.startswith("/modo "):
             self._handle_modo_command(text)
             return
+        if text == "/bot" or text.startswith("/bot "):
+            # `/bot` e o nome novo do `/modo` (fase 1): mesma troca, mesmos
+            # apelidos; o catalogo de comandos lista os dois.
+            self._handle_modo_command(text.replace("/bot", "/modo", 1))
+            return
         if text == "/modelo" or text.startswith("/modelo "):
             self._handle_modelo_command(text)
             return
         if text == "/modelos":
             self.action_models()
             return
-        if text in {"/modos", "/perfil", "/persona"}:
+        if text in {"/modos", "/bots", "/perfil", "/persona"}:
             self.action_modes()
             return
         if text in {"/sessoes", "/sessões", "/sessao", "/sessão"}:

@@ -80,6 +80,7 @@ class CareerMixin(OrchestratorContract):
             automation="career:weekly",
             trigger=trigger,
             delivery="telegram",
+            bot="sabrina",
         ) as run:
             return await self._send_career_body(day, key, path, run)
 

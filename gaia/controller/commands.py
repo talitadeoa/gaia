@@ -10,9 +10,10 @@ from pathlib import Path
 
 from gaia.agenda.client import AgendaError
 from gaia.agent.providers.factory import normalize_provider
+from gaia.bots import BotIndisponivel
 from gaia.config import ECHO_LANGUAGES, ECHO_NAMES
 from gaia.controller.contract import OrchestratorContract
-from gaia.controller.modes import PERSONAS, get_persona
+from gaia.controller.modes import get_persona
 from gaia.controller.proactive import parse_reminder
 from gaia.finance.quotes import FinanceError, fetch_quote, format_quote
 from gaia.focus import moon_details, period_label, principal_phase_today
@@ -101,6 +102,8 @@ class CommandsMixin(OrchestratorContract):
                 self.ui.error(f"falha ao indexar: {exc}")
         elif command in {"/modelo", "/modelos", "/model"}:
             await self._switch_model(argument)
+        elif command in {"/bot", "/bots"}:
+            await self._switch_bot(argument)
         elif command in {"/modo", "/perfil", "/persona"}:
             await self._switch_mode(argument)
         elif command in {"/metas", "/objetivos", "/painel"}:
@@ -265,7 +268,10 @@ class CommandsMixin(OrchestratorContract):
         )
 
     async def _new_session(self) -> None:
+        """Nova conversa do bot ativo, com a politica da sessao dele."""
         async with self._transition_lock:
+            bot = self._bot_for_mode(self.persona.key)
+            workspace = self._bot_directory(bot)
             conv = self.store.create_conversation(
                 str(self.directory),
                 title="Nova sessão",
@@ -274,10 +280,13 @@ class CommandsMixin(OrchestratorContract):
             )
             conversation_id = int(conv["id"])
             session = await self.client.create_session(
-                title=f"Gaia — {self.directory.name} · {self.persona.name}",
-                model=self.client.model,
+                title=f"Gaia — {workspace.name} · {self.persona.name}",
+                model=self._model_for(bot),
             )
             self.store.set_session(conversation_id, session.id)
+            policy = self._policy_for(bot)
+            if policy is not None:
+                self._apply_policy(session.id, policy)
             self.conversation_id = conversation_id
             self.session_id = session.id
             self._last_assistant_message_id = None
@@ -666,18 +675,29 @@ class CommandsMixin(OrchestratorContract):
                 self.ui.info(f"   {task.notes}")
 
     async def _switch_mode(self, argument: str) -> None:
+        """`/modo`: alias antigo de `/bot` (mesmos bots, mesmos apelidos)."""
+        await self._switch_bot(argument)
+
+    async def _switch_bot(self, argument: str) -> None:
+        """`/bot [nome]`: lista sem argumento; troca com o nome ou um apelido."""
         if not argument:
-            self.ui.info(f"modo atual: {self.persona.name} ({self.persona.key})")
-            for item in PERSONAS.values():
+            self.ui.info(f"bot atual: {self.persona.name} ({self.persona.key})")
+            for item in self.modes():
                 self.ui.info(f"  {item.key}: {item.name} — {item.summary}")
             return
         persona = get_persona(argument)
         if persona is None:
-            options = ", ".join(PERSONAS)
-            self.ui.warning(f"modo desconhecido: {argument} (opções: {options})")
+            options = ", ".join(persona.key for persona in self.modes())
+            self.ui.warning(f"bot desconhecido: {argument} (opções: {options})")
             return
-        await self.select_mode(persona.key)
-        self.ui.success(f"modo ativo: {persona.name} — {persona.summary}")
+        try:
+            bot = await self.select_bot(persona.key)
+        except BotIndisponivel as exc:
+            # Configuracao certa, ambiente faltando (ex.: clone da dissertacao):
+            # aviso claro em vez de troca silenciosa para o bot errado.
+            self.ui.warning(str(exc))
+            return
+        self.ui.success(f"bot ativo: {bot.name} — {bot.role}")
 
     async def _handle_audiobook(self, argument: str) -> None:
         """`/audiobook <arquivo> [titulo]`: narra um PDF/TXT da pasta de entrada."""

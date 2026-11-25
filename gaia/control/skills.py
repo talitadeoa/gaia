@@ -57,14 +57,18 @@ SKILLS: tuple[Skill, ...] = (
         id="market",
         name="Monitoramento da bolsa",
         description=(
-            "Le a carteira (watchlist), busca cotacoes e envia o resumo nos dias "
-            "configurados, sem usar o modelo."
+            "Le a carteira (watchlist), busca cotacoes e entrega o resumo da "
+            "Ariana nos dias configurados, sem usar o modelo. O painel e a "
+            "entrega principal; o Telegram, quando ligado, recebe o mesmo texto."
         ),
         kind="routine",
-        requires=("briefing.enabled", "briefing.market_enabled", "telegram.enabled"),
+        # Sem `telegram.enabled`: num `serve` headless a Ariana entrega no feed
+        # do painel (design §4.5a). Exigir Telegram aqui era o gate duplo que
+        # deixava a automacao ligada e muda.
+        requires=("briefing.market_enabled",),
         schedule_hint="nos dias da carteira, dentro da janela configurada",
         module="gaia/briefing/market.py, gaia/finance/",
-        tags=("financas", "notificacao"),
+        tags=("financas",),
     ),
     Skill(
         id="briefing",
@@ -158,6 +162,22 @@ SKILLS: tuple[Skill, ...] = (
         provides=("audiobook",),
         module="gaia/audiobook/",
         tags=("audio", "ferramentas"),
+    ),
+    Skill(
+        id="automations",
+        name="Automacoes criadas pelo chat",
+        description=(
+            "Cria automacao recorrente (lembrete, resumo da agenda, resumo de "
+            "estudos) a partir de uma frase, com confianca medida por regras. "
+            "O agendador executa pelo id `user:*` da tabela `automations`."
+        ),
+        kind="tool_group",
+        # Sem estes gates a automacao nasce mas nunca executa: o handler checa
+        # os mesmos caminhos em `_user_automation_*`.
+        requires=("agent.tools",),
+        provides=("criar_automacao",),
+        module="gaia/controller/automation_builder.py, gaia/agent/tools/automations.py",
+        tags=("automacao", "ferramentas"),
     ),
     Skill(
         id="planilhas",

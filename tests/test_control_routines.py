@@ -6,7 +6,6 @@ from datetime import datetime
 
 import pytest
 
-from gaia.config import Config
 from gaia.control import routines as routines_mod
 from gaia.memory.store import MemoryStore
 
@@ -14,11 +13,9 @@ NOW = datetime(2026, 11, 24, 10, 0).astimezone()
 
 
 @pytest.fixture
-def cfg(tmp_path, isolated_env):
-    return Config.load(
-        config_path=tmp_path / "nao-existe.toml",
-        env={"GAIA_DATA_DIR": str(tmp_path / "data")},
-    )
+def cfg(cfg):
+    """Config do conftest; aqui os campos do painel sao o que importa."""
+    return cfg
 
 
 @pytest.fixture

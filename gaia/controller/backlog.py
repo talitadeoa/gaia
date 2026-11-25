@@ -100,6 +100,14 @@ class BacklogMixin(OrchestratorContract):
                 f"Backlog: o item '{titulo}' ({projeto}) falhou: "
                 f"{resultado.error or 'erro sem detalhe'}"
             )
+        # O feed da Ada e a entrega do painel (design §4.5a/§7 item 13): o PR
+        # aberto (ou a falha) aparece no rail sem depender do Telegram.
+        self.bot_message(
+            "ada",
+            "job",
+            f"PR pronto: {titulo}" if resultado.ok else f"Falhou: {titulo}",
+            texto,
+        )
         try:
             self.ui.proactive(texto)
         except Exception as exc:  # UI nunca derruba o worker

@@ -162,3 +162,48 @@ tags: [preferencias]
     assert brain.append_preference("Gosto de café")
     custom = (brain.root / "custom_prefs.md").read_text(encoding="utf-8")
     assert "Gosto de café" in custom
+
+
+# ------------------------------------------------- extensoes do indice
+def test_index_respeita_text_extensions(tmp_path):
+    """A Donna indexa .tex; o padrao continua so .md e .docx nunca entra."""
+    from gaia.config import SecondBrainConfig
+    from gaia.secondbrain.index import SecondBrainIndex
+
+    root = tmp_path / "brain"
+    root.mkdir()
+    (root / "nota.md").write_text("# Nota\n\ntexto markdown", encoding="utf-8")
+    (root / "capitulo.tex").write_text(
+        "\\section{Introdução}\nconteudo do capitulo", encoding="utf-8"
+    )
+    (root / "curriculo.docx").write_bytes(b"PK\x03\x04binario")
+
+    padrao = SecondBrainIndex(SecondBrainConfig(path=str(root)), tmp_path / "i1.db")
+    try:
+        padrao.reindex()
+        caminhos = {hit.rel_path for hit in padrao.recent(20)}
+        assert "nota.md" in caminhos
+        assert "capitulo.tex" not in caminhos
+    finally:
+        padrao.close()
+
+    cfg = SecondBrainConfig(path=str(root), text_extensions=[".md", ".tex"])
+    com_tex = SecondBrainIndex(cfg, tmp_path / "i2.db")
+    try:
+        com_tex.reindex()
+        caminhos = {hit.rel_path for hit in com_tex.recent(20)}
+        assert {"nota.md", "capitulo.tex"} <= caminhos
+        assert "curriculo.docx" not in caminhos
+        hits = com_tex.search("capitulo")
+        assert any(hit.rel_path == "capitulo.tex" for hit in hits)
+        # O titulo do .tex vem do \section, nao do preambulo.
+        tex = next(h for h in com_tex.recent(20) if h.rel_path == "capitulo.tex")
+        assert tex.title == "Introdução"
+    finally:
+        com_tex.close()
+
+
+def test_text_extensions_padrao_e_so_markdown():
+    from gaia.config import SecondBrainConfig
+
+    assert SecondBrainConfig().text_extensions == [".md"]

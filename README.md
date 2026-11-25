@@ -89,7 +89,7 @@ As variáveis conhecidas estão em `.env.example`, comentadas uma a uma.
 ```toml
 [agent]
 # Presets: commandcode | deepseek | openai | openrouter | ollama | anthropic |
-# opencode | groq | mistral | xai | custom
+# opencode | groq | mistral | xai | opendesign | custom
 provider = "commandcode"
 model = "deepseek/deepseek-v4.1-flash"
 base_url = ""             # obrigatório apenas em "custom"
@@ -102,10 +102,17 @@ precisa colar nada. Para os modelos Claude dela, use
 `provider = "commandcode-anthropic"` (mesma chave, wire Anthropic). Requer
 plano com acesso à Provider API.
 
+O **OpenDesign** (`provider = "opendesign"`, `base_url`
+`https://amr-link.open-design.ai/v1`) é um gateway compatível com OpenAI, o
+mesmo que o pi usa: um endpoint, os modelos de todas as famílias (Claude, GPT,
+Gemini, DeepSeek, GLM, Kimi, Qwen...). A chave é a mesma do pi, lida de
+`~/.pi/agent/auth.json`; também vale `OPENDESIGN_API_KEY`.
+
 | Atalho | Vai para | Consulta a rede? |
 |---|---|---|
 | `/modelo cc` | Command Code, com o último modelo usado lá | não |
 | `/modelo ds` | DeepSeek direta (`deepseek-flash`, o V4.1 Flash deles) | não |
+| `/modelo od` | OpenDesign (`deepseek-v4.1-flash`, o gateway do pi) | não |
 | `/modelo glm` | `commandcode/z-ai/glm-5.3-flash` | não |
 | `/modelo turbo` | `commandcode/deepseek/deepseek-v4.1-flash-fast` | não |
 | `/modelo zen` | OpenCode Zen, com o último modelo usado lá | não |
@@ -207,6 +214,20 @@ gaia --remote http://gaia:8787 ask "resuma o dia"
   registrado com `trigger=manual` e o resultado (ou o erro) aparece na hora; o
   botão mostra `rodando…` enquanto espera e responde 409 se o motor estiver num
   turno. Rodar uma rotina pausada é permitido: o clique é explícito.
+- **Automação pelo chat.** "toda sexta às 9h me lembre de estudar" cria uma
+  linha nova na tabela `automations` (id `user:*`) pela ferramenta
+  `criar_automacao`, que aparece no painel como qualquer outra e passa a ser
+  disparada pelo agendador no horário. Quem interpreta é
+  `controller/automation_builder.py`: parser de slots (dias, hora, skill alvo,
+  entrega, parâmetros) e **confiança medida por regras, não pelo modelo** —
+  alta (≥7) cria ativada, média (4–6) cria **pausada** e pede conferência no
+  painel, baixa (<4) não cria nada e pede para reformular. Na v1 as skills
+  alvo são `reminder` ("me lembre de X"), `agenda_summary` ("resumo da
+  agenda") e `estudos_summary` ("resumo dos estudos"). Guardas: a skill alvo
+  tem de estar ligada na config, o horário tem de ser HH:MM válido, no máximo
+  10 criações automáticas por dia e **nunca** edita nem apaga automação
+  existente (pedido repetido devolve a que já existe; pausar/editar é no
+  painel). Ver `docs/plans/2026-11-24-automacoes-pelo-chat.md`.
 - **Modo voz no web** (`🎙 voz`, aparece quando o servidor consegue transcrever).
   O microfone é o **de quem conversa**: o navegador grava WAV e manda em
   `POST /voice/upload`, e o motor transcreve com o faster-whisper local (o mini
@@ -327,7 +348,10 @@ O agendador é **único** e vive no `gaia serve` (mesmo processo que é dono do
 banco): a cada ciclo ele lê a tabela `automations`, calcula se a rotina está
 devida e chama o handler da skill. Não há cron do sistema nem APScheduler.
 Cada rotina mantém a reserva `claim_meta` como segunda barreira — o painel é a
-primeira, o banco continua impedindo entrega dupla se algo escapar.
+primeira, o banco continua impedindo entrega dupla se algo escapar. Além das
+rotinas do registry, o agendador despacha as automacoes criadas pelo chat
+(`user:*`) pela coluna `skill`: `reminder` entrega o texto, `agenda_summary`
+manda o resumo do dia e `estudos_summary` o progresso dos simulados.
 
 - **Retry:** falha de rede/desconhecido é tentada de novo com backoff
   exponencial até `retry_max` (padrão 2). `auth` e `config` **não** repetem: o
@@ -356,7 +380,7 @@ entendeu vai direto para o agente.
 |---|---|
 | `F1` | paleta de comandos |
 | `F2` | sessões anteriores |
-| `F3` / `Tab` | trocar de modo |
+| `F3` / `Tab` | trocar de bot |
 | `F4` | alternar seleção de texto |
 | `F5` | recolher/abrir os painéis |
 | `F6` | seletor de modelo |
@@ -371,19 +395,44 @@ gaia ask "resuma o que eu anotei hoje"
 gaia ask --no-voice "responda apenas: ok"
 ```
 
-## Modos
+## Bots
 
-Troca com `/modo <nome>`, `Tab` ou `F3`. Cada modo injeta uma diretriz no prompt
-e fica salvo entre sessões.
+Troca com `/bot <nome>` (ou o antigo `/modo <nome>`), `Tab` ou `F3`. Cada bot
+tem conversa, sessão de contexto, ferramentas permitidas e área de trabalho
+próprias; o que ele faz fica salvo entre sessões. O padrão se configura em
+`[interface] default_mode`.
 
-| Modo | Para quê |
-|---|---|
-| `assistente` (padrão) | agenda, rotinas, prioridades, conversa |
-| `pesquisadora` | mestrado, leitura, fichamento, escrita, metodologia |
-| `trabalhadora` | currículo, vagas, entrevistas, negociação |
-| `investidora` | bolsa, indicadores, orçamento, risco |
+| Bot | Nome | Para quê | Onde trabalha |
+|---|---|---|---|
+| `gaia` (padrão) | Gaia | agenda, rotinas, prioridades, conversa | repo da Gaia |
+| `donna` | Donna Haraway | mestrado, leitura, fichamento, escrita, metodologia | `~/dissertacao` |
+| `ariana` | Ariana Grande | bolsa, indicadores, orçamento, risco | dados locais |
+| `sabrina` | Sabrina Carpenter | currículo, vagas, entrevistas, negociação | `~/SecondBrain/cv` |
+| `ada` | Ada Lovelace | backlog, código e pull request | `~/pr-workspace` |
 
-O padrão se configura em `[interface] default_mode`.
+As chaves antigas (`assistente`, `pesquisadora`, `trabalhadora`, `investidora`)
+continuam valendo: `assistente` é a `gaia`, `pesquisadora` é a `donna`,
+`trabalhadora` é a `sabrina` e `investidora` é a `ariana` — inclusive nas
+conversas antigas.
+
+A fronteira de cada bot é a **allowlist de ferramentas** e o **escopo de
+arquivos**, não o prompt: a Donna tem `bash`/`pi` dentro de `~/dissertacao` e não
+alcança `~/pr-workspace`; a Ada nunca trabalha no repo da Gaia (o deploy faz
+`reset --hard`). A Ariana não usa o modelo no laço da carteira. O ajuste fica em
+`[bots.<id>]` no `config.toml`; bot mal configurado (ferramenta inexistente,
+workspace ausente, escopo que não contém o workspace) recusa subir com mensagem
+clara, e um bot que depende de uma pasta que ainda não existe aparece como
+indisponível em vez de derrubar a Gaia.
+
+No web, o rail à esquerda mostra os cinco com o **nome completo**, o badge de
+não-lido e o ponto de "rodando"; clicar navega para `#b/<bot>` (F5 e o voltar
+do navegador continuam). O card **atividade** no aside mostra o que cada bot
+produziu em segundo plano, e `falar_com_bot` deixa um bot perguntar a outro
+(uma resposta, no máximo duas chamadas encadeadas).
+
+Segundo plano não amplia permissão: `write`/`edit`/`bash` continuam pedindo
+aprovação e, num job sem ninguém olhando a tela, a permissão é negada e o feed
+avisa — nunca silêncio.
 
 ## Agente e ferramentas
 
@@ -391,7 +440,8 @@ O motor fica em `gaia/agent/` e fala direto com a API do provedor — sem
 servidor intermediário, sem harness externo.
 
 Sete ferramentas de base: `read`, `list`, `glob`, `grep`, `write`, `edit`,
-`bash` — iguais em todos os modos.
+`bash` — disponíveis para todos os bots, mas cada bot só recebe as que a
+allowlist dele libera.
 
 Quando `agenda.env_file` tem credencial válida, entram mais cinco, específicas
 da Agenda (não dependem de shell):
@@ -699,7 +749,7 @@ gaia browser screenshot https://exemplo.com captura.png
 | `/ajuda` · `/status` · `/tokens` | comandos · provedor/modelo/sessão · consumo |
 | `/buscar <termo>` · `/nota <título>` | Second Brain |
 | `/indexar` · `/novo` · `/consolidar [dia]` · `/sonhar [dia]` | reindexa · nova conversa · memória do dia · sonho noturno |
-| `/modelo [nº\|slug]` · `/modo [nome]` | lista/troca modelo · troca persona |
+| `/modelo [nº\|slug]` · `/bot [nome]` (`/modo`) | lista/troca modelo · troca de bot |
 | `/bolsa <ticker>` · `/carteira [add\|remover <ticker>]` | cotação · carteira |
 | `/metas` · `/painel` · `/foco [definir\|limpar]` | metas do ciclo · painel (`/painel` é alias de `/metas`) · foco |
 | `/tarefas [sync\|fazer\|concluir\|limpar]` | tarefas de longo prazo |

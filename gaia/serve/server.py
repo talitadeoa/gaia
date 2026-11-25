@@ -39,6 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
+from gaia.bots import BotIndisponivel
 from gaia.control import routines as routines_mod
 from gaia.controller import command_catalog as commands
 from gaia.interface.remote import RemoteUI
@@ -83,6 +84,18 @@ class Target(Protocol):
     def decide(self, request_id: str, decision: str) -> None: ...
 
     def abort(self) -> None: ...
+
+    def bots(self) -> list[dict[str, Any]]:
+        """Bots do registry (id, nome, papel, disponivel, atual). Opcional."""
+
+    def select_bot(self, key: str) -> list[str]:
+        """Troca o bot ativo. Opcional: alvo antigo responde 503."""
+
+    def activity(self, limit: int = 50, bot: str = "") -> dict[str, Any]:
+        """Feed de atividade dos bots (mensagens + runs). Opcional."""
+
+    def mark_seen(self, bot: str = "") -> dict[str, Any]:
+        """Zera o nao-lido do feed (``bot`` vazio = todos). Opcional."""
 
 
 def _opcional(target: Any, nome: str) -> Any:
@@ -386,6 +399,17 @@ class _Handler(BaseHTTPRequestHandler):
             # Mesmo JSON de `/control/api/providers` (chaves sempre mascaradas).
             self._provedores()
             return
+        if rota == "/bots":
+            # Bots do registry: a mesma lista que `/modes` devolve por
+            # compatibilidade, com o estado de disponibilidade da maquina, o
+            # badge de nao-lido e o indicador de rodando (rail do web).
+            self._json(HTTPStatus.OK, {"bots": self._modes()})
+            return
+        if rota == "/bots/activity":
+            # Feed do painel: mensagens e execucoes recentes por bot. Leitura
+            # pura; 503 quando o motor nao expoe atividade (fake/alvo antigo).
+            self._atividade(parse_qs(url.query))
+            return
         if rota == "/modes":
             self._json(HTTPStatus.OK, {"modes": self._modes()})
             return
@@ -591,6 +615,61 @@ class _Handler(BaseHTTPRequestHandler):
                 {"ok": True, "model": slug, "messages": mensagens},
             )
             return
+        if rota == "/bots/seen":
+            # Badge do rail: {bot?: "ariana"}; vazio zera todos.
+            chave = str(corpo.get("bot") or corpo.get("id") or "").strip()
+            try:
+                resultado = self._marcar_visto(chave)
+            except RuntimeError as exc:
+                self._erro(
+                    HTTPStatus.SERVICE_UNAVAILABLE, "activity_unavailable", str(exc)
+                )
+                return
+            except Exception as exc:
+                logger.warning("marcar visto falhou: %s", exc)
+                self._erro(
+                    HTTPStatus.INTERNAL_SERVER_ERROR, "seen_failed", str(exc)
+                )
+                return
+            self._json(HTTPStatus.OK, resultado)
+            return
+        if rota == "/bot/select":
+            chave = str(corpo.get("id") or corpo.get("bot") or corpo.get("mode") or "").strip()
+            if not chave:
+                self._erro(HTTPStatus.BAD_REQUEST, "empty_bot", "bot vazio")
+                return
+            try:
+                mensagens = self._selecionar_bot(chave)
+            except BotIndisponivel as exc:
+                # Configuracao certa, dependencia do ambiente faltando (ex.:
+                # clone da dissertacao): 409 com motivo, nunca queda no padrao.
+                self._erro(HTTPStatus.CONFLICT, "bot_unavailable", str(exc))
+                return
+            except RuntimeError as exc:
+                self._erro(HTTPStatus.CONFLICT, "busy", str(exc))
+                return
+            except ValueError as exc:
+                # Id desconhecido nao cai no padrao em silencio.
+                self._erro(HTTPStatus.BAD_REQUEST, "bot_failed", str(exc))
+                return
+            except Exception as exc:
+                logger.warning("troca de bot falhou: %s", exc)
+                self._erro(HTTPStatus.INTERNAL_SERVER_ERROR, "bot_failed", str(exc))
+                return
+            atual = next((b for b in self._modes() if b.get("current")), {})
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "bot": atual.get("id") or chave,
+                    "messages": mensagens,
+                    "engine": self._engine(),
+                    "history": self._history(),
+                    "sessions": self._sessions(),
+                    "bots": self._modes(),
+                },
+            )
+            return
         if rota == "/mode":
             chave = str(corpo.get("mode") or "").strip()
             if not chave:
@@ -707,6 +786,10 @@ class _Handler(BaseHTTPRequestHandler):
             "has_key": provedor.get("has_key", False),
             "auth_source": provedor.get("auth_source", ""),
             "mode": dados.get("mode", ""),
+            # Bot ativo (id) e nome completo: `mode`/`mode_key` continuam
+            # sendo a chave historica, que agora e o proprio id do bot.
+            "bot": dados.get("bot", dados.get("mode_key", "")),
+            "bot_name": dados.get("mode", ""),
             "busy": bool(dados.get("busy")),
             "chinese": bool(dados.get("chinese")),
             "language": self._idioma_atual(),
@@ -720,16 +803,72 @@ class _Handler(BaseHTTPRequestHandler):
         }
 
     def _modes(self) -> list[dict[str, Any]]:
-        funcao = getattr(self.app.target, "modes", None)
-        if not callable(funcao):
+        """Lista de bots do motor.
+
+        `/bots` e `/modes` (e `POST /bot/select`/`POST /mode`) leem a MESMA
+        fonte: `Target.bots` quando existe, senao o antigo `Target.modes`.
+        Assim um alvo novo nao precisa duplicar a regra, e um alvo antigo
+        continua funcionando.
+        """
+        funcao = getattr(self.app.target, "bots", None)
+        if callable(funcao):
+            return list(funcao())
+        antigo = getattr(self.app.target, "modes", None)
+        if not callable(antigo):
             return []
-        return list(funcao())
+        return list(antigo())
 
     def _selecionar_modo(self, chave: str) -> list[str]:
         funcao = getattr(self.app.target, "select_mode", None)
         if not callable(funcao):
             raise RuntimeError("troca de modo indisponivel neste motor")
         return list(funcao(chave))
+
+    def _selecionar_bot(self, chave: str) -> list[str]:
+        """`POST /bot/select`: cai no alias antigo se o motor nao tiver bots."""
+        funcao = getattr(self.app.target, "select_bot", None)
+        if callable(funcao):
+            return list(funcao(chave))
+        return self._selecionar_modo(chave)
+
+    def _atividade(self, query: dict[str, list[str]]) -> None:
+        """GET /bots/activity: feed do painel (mensagens + runs)."""
+        funcao = _opcional(self.app.target, "activity")
+        if funcao is None:
+            self._erro(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "activity_unavailable",
+                "atividade dos bots indisponivel neste motor",
+            )
+            return
+        try:
+            limite = int((query.get("limit") or ["30"])[0])
+        except (TypeError, ValueError):
+            limite = 30
+        bot = str((query.get("bot") or [""])[0]).strip()
+        try:
+            dados = funcao(limite, bot)
+        except Exception as exc:
+            logger.warning("atividade dos bots falhou: %s", exc)
+            self._erro(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "activity_failed", str(exc)
+            )
+            return
+        self._json(HTTPStatus.OK, dados)
+
+    def _marcar_visto(self, bot: str) -> dict[str, Any]:
+        """`POST /bots/seen`: delega ao motor; 503 quando ele nao tem feed."""
+        funcao = _opcional(self.app.target, "mark_seen")
+        if funcao is None:
+            raise RuntimeError("feed dos bots indisponivel neste motor")
+        return dict(funcao(bot) or {})
+
+    def _sessions(self) -> list[dict[str, Any]]:
+        """Conversas do bot ativo (o cliente redesenha ao trocar de bot)."""
+        funcao = getattr(self.app.target, "sessions", None)
+        if not callable(funcao):
+            return []
+        return list(funcao())
 
     def _abrir_sessao(self, identificador: int) -> list[str]:
         funcao = getattr(self.app.target, "open_session", None)

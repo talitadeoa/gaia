@@ -15,13 +15,6 @@ from gaia.control.runs import (
 from gaia.memory.store import MemoryStore
 
 
-@pytest.fixture
-def store(tmp_path):
-    instance = MemoryStore(tmp_path / "gaia.db")
-    yield instance
-    instance.close()
-
-
 async def test_record_run_sucesso(store):
     async with record_run(
         store, kind="career", automation="career:weekly", delivery="telegram"
@@ -139,6 +132,8 @@ def test_render_run_nao_vaza_campos_internos(store):
         "error",
         "error_kind",
         "attempt",
+        # `bot` e novo (schema v12/fase 3): a atribuicao da execucao ao bot.
+        "bot",
     }
 
 
